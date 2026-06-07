@@ -31,87 +31,87 @@ TEAM_FA = {
     "Croatia":"کرواسی","Ghana":"غنا","Panama":"پاناما",
 }
 
+# نام‌های متفاوت که API ممکنه استفاده کنه
+API_NAME_MAP = {
+    "Korea Republic": "South Korea",
+    "Czech Republic": "Czechia",
+    "Bosnia Herzegovina": "Bosnia and Herzegovina",
+    "Côte D'Ivoire": "Ivory Coast",
+    "IR Iran": "Iran",
+    "USA": "United States",
+    "Türkiye": "Turkiye",
+    "England": "England",
+    "Congo DR": "DR Congo",
+}
+
 # (group, round, team1, team2, utc_time, city)
-# round: 1, 2, 3
 GROUP_MATCHES = [
-    # Group A
     ("A",1,"Mexico","South Africa","2026-06-11 20:00","Mexico City"),
     ("A",1,"South Korea","Czechia","2026-06-12 01:00","Guadalajara"),
     ("A",2,"Mexico","Czechia","2026-06-16 00:00","Mexico City"),
     ("A",2,"South Africa","South Korea","2026-06-16 23:00","Guadalajara"),
     ("A",3,"Mexico","South Korea","2026-06-20 23:00","Mexico City"),
     ("A",3,"Czechia","South Africa","2026-06-20 23:00","Guadalajara"),
-    # Group B
     ("B",1,"Canada","Bosnia and Herzegovina","2026-06-12 19:00","Toronto"),
     ("B",1,"Qatar","Switzerland","2026-06-13 19:00","San Francisco"),
     ("B",2,"Canada","Switzerland","2026-06-17 01:00","Toronto"),
     ("B",2,"Qatar","Bosnia and Herzegovina","2026-06-17 22:00","Vancouver"),
     ("B",3,"Canada","Qatar","2026-06-21 22:00","Toronto"),
     ("B",3,"Switzerland","Bosnia and Herzegovina","2026-06-21 22:00","San Francisco"),
-    # Group C
     ("C",1,"Brazil","Morocco","2026-06-13 22:00","New York"),
     ("C",1,"Haiti","Scotland","2026-06-14 01:00","Boston"),
     ("C",2,"Brazil","Scotland","2026-06-18 01:00","San Francisco"),
     ("C",2,"Haiti","Morocco","2026-06-18 22:00","Philadelphia"),
     ("C",3,"Brazil","Haiti","2026-06-22 22:00","New York"),
     ("C",3,"Scotland","Morocco","2026-06-22 22:00","Boston"),
-    # Group D
     ("D",1,"United States","Paraguay","2026-06-12 23:00","Los Angeles"),
     ("D",1,"Australia","Turkiye","2026-06-14 04:00","Vancouver"),
     ("D",2,"United States","Turkiye","2026-06-18 23:00","Los Angeles"),
     ("D",2,"Australia","Paraguay","2026-06-19 22:00","Seattle"),
     ("D",3,"United States","Australia","2026-06-23 22:00","Los Angeles"),
     ("D",3,"Turkiye","Paraguay","2026-06-23 22:00","Seattle"),
-    # Group E
     ("E",1,"Germany","Curacao","2026-06-14 18:00","Houston"),
     ("E",1,"Ivory Coast","Ecuador","2026-06-15 00:00","Philadelphia"),
     ("E",2,"Germany","Ecuador","2026-06-19 01:00","Dallas"),
     ("E",2,"Ivory Coast","Curacao","2026-06-19 22:00","Miami"),
     ("E",3,"Germany","Ivory Coast","2026-06-23 23:00","Houston"),
     ("E",3,"Ecuador","Curacao","2026-06-23 23:00","Dallas"),
-    # Group F
     ("F",1,"Netherlands","Japan","2026-06-14 21:00","Dallas"),
     ("F",1,"Sweden","Tunisia","2026-06-15 03:00","Monterrey"),
     ("F",2,"Netherlands","Tunisia","2026-06-19 23:00","Houston"),
     ("F",2,"Sweden","Japan","2026-06-20 22:00","Dallas"),
     ("F",3,"Netherlands","Sweden","2026-06-24 22:00","Dallas"),
     ("F",3,"Japan","Tunisia","2026-06-24 22:00","Houston"),
-    # Group G
     ("G",1,"Belgium","Egypt","2026-06-15 23:00","Seattle"),
     ("G",1,"Iran","New Zealand","2026-06-16 04:00","Los Angeles"),
     ("G",2,"Belgium","New Zealand","2026-06-20 01:00","Seattle"),
     ("G",2,"Iran","Egypt","2026-06-20 22:00","Los Angeles"),
     ("G",3,"Belgium","Iran","2026-06-24 23:00","Seattle"),
     ("G",3,"New Zealand","Egypt","2026-06-24 23:00","Los Angeles"),
-    # Group H
     ("H",1,"Spain","Cape Verde","2026-06-15 18:00","Atlanta"),
     ("H",1,"Saudi Arabia","Uruguay","2026-06-15 23:00","Miami"),
     ("H",2,"Spain","Uruguay","2026-06-19 18:00","Atlanta"),
     ("H",2,"Saudi Arabia","Cape Verde","2026-06-20 01:00","Miami"),
     ("H",3,"Spain","Saudi Arabia","2026-06-24 01:00","Atlanta"),
     ("H",3,"Uruguay","Cape Verde","2026-06-24 01:00","Miami"),
-    # Group I
     ("I",1,"France","Senegal","2026-06-16 19:00","New York"),
     ("I",1,"Iraq","Norway","2026-06-16 23:00","Boston"),
     ("I",2,"France","Norway","2026-06-21 01:00","New York"),
     ("I",2,"Iraq","Senegal","2026-06-21 22:00","Boston"),
     ("I",3,"France","Iraq","2026-06-25 22:00","New York"),
     ("I",3,"Norway","Senegal","2026-06-25 22:00","Philadelphia"),
-    # Group J
     ("J",1,"Argentina","Algeria","2026-06-17 01:00","Kansas City"),
     ("J",1,"Austria","Jordan","2026-06-17 04:00","San Francisco"),
     ("J",2,"Argentina","Jordan","2026-06-21 01:00","Kansas City"),
     ("J",2,"Austria","Algeria","2026-06-21 22:00","San Francisco"),
     ("J",3,"Argentina","Austria","2026-06-25 23:00","Kansas City"),
     ("J",3,"Jordan","Algeria","2026-06-25 23:00","San Francisco"),
-    # Group K
     ("K",1,"Portugal","DR Congo","2026-06-17 18:00","Houston"),
     ("K",1,"Uzbekistan","Colombia","2026-06-18 01:00","Kansas City"),
     ("K",2,"Portugal","Colombia","2026-06-22 01:00","Houston"),
     ("K",2,"Uzbekistan","DR Congo","2026-06-22 22:00","Kansas City"),
     ("K",3,"Portugal","Uzbekistan","2026-06-26 22:00","Houston"),
     ("K",3,"Colombia","DR Congo","2026-06-26 22:00","Kansas City"),
-    # Group L
     ("L",1,"England","Croatia","2026-06-18 23:00","Dallas"),
     ("L",1,"Ghana","Panama","2026-06-19 01:00","Atlanta"),
     ("L",2,"England","Panama","2026-06-22 23:00","Dallas"),
@@ -131,3 +131,4 @@ STAGE_LABEL = {
 }
 
 KNOCKOUT_ORDER = ["r32","r16","qf","sf","third","final"]
+KNOCKOUT_STAGES = {"r32","r16","qf","sf","third","final"}

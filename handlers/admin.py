@@ -1,13 +1,14 @@
 from telegram import Update, InlineKeyboardButton as Btn, InlineKeyboardMarkup as Markup
 from telegram.ext import ContextTypes, ConversationHandler
 
-from database import get_all_matches, get_match, set_result, add_match, update_match_teams, get_all_users, get_pool
+from database import (get_all_matches, get_match, set_result, add_match,
+                      update_match_teams, get_all_users, get_pool)
 from config import ADMIN_IDS
 from utils import flag, fmt_time, parse_score
 from maintenance import is_maintenance, set_maintenance
 from wc_data import STAGE_LABEL
 
-ADMIN_RESULT_ID, ADMIN_RESULT_SCORE = range(20, 22)
+ADMIN_RESULT_ID, ADMIN_RESULT_SCORE, ADMIN_RESULT_PENALTY = range(20, 23)
 ADMIN_MATCH_T1, ADMIN_MATCH_T2, ADMIN_MATCH_STAGE, ADMIN_MATCH_TIME, ADMIN_MATCH_CITY = range(30, 35)
 ADMIN_EDIT_ID, ADMIN_EDIT_T1, ADMIN_EDIT_T2 = range(40, 43)
 
@@ -33,7 +34,7 @@ async def _admin_menu(send):
         parse_mode="HTML",
         reply_markup=Markup([
             [Btn("📋 لیست بازی‌ها", callback_data="admin_list")],
-            [Btn("✅ ثبت نتیجه", callback_data="admin_result")],
+            [Btn("✅ ثبت نتیجه دستی", callback_data="admin_result")],
             [Btn("➕ بازی جدید (حذفی)", callback_data="admin_addmatch")],
             [Btn("✏️ ویرایش تیم‌های حذفی", callback_data="admin_editmatch")],
             [Btn("📢 پیام همگانی", callback_data="admin_broadcast")],
@@ -57,26 +58,24 @@ async def cb_admin_list(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if not matches:
         await query.edit_message_text("هنوز بازی‌ای نیست!")
         return
-
     stages_seen = {}
     for m in matches:
-        stages_seen.setdefault(m["stage"], []).append(m)
-
+        stages_seen.setdefault(m["stage"],[]).append(m)
     txt = "📋 <b>همه بازی‌ها:</b>\n\n"
     for stage, ms in stages_seen.items():
         lbl = STAGE_LABEL.get(stage,{}).get("fa", stage)
         txt += f"<b>── {lbl} ──</b>\n"
         for m in ms:
             status = f"✅ {m['result1']}-{m['result2']}" if m["is_finished"] else ("🔒" if m["is_locked"] else "🟢")
+            api = f" [api:{m['api_id']}]" if m["api_id"] else ""
             grp = f"[{m['grp']}] " if m["grp"] else ""
-            txt += f"<code>#{m['id']}</code> {grp}{flag(m['team1'])}{m['team1']} vs {m['team2']}{flag(m['team2'])} {status}\n"
+            txt += f"<code>#{m['id']}</code>{api} {grp}{flag(m['team1'])}{m['team1']} vs {m['team2']}{flag(m['team2'])} {status}\n"
         txt += "\n"
-
     if len(txt) > 4000: txt = txt[:3900] + "\n..."
     await query.edit_message_text(txt, parse_mode="HTML", reply_markup=Markup([
         [Btn("🔙 برگشت", callback_data="adminpanel")]]))
 
-# ── ثبت نتیجه ─────────────────────────────────
+# ── ثبت نتیجه دستی (اضطراری) ─────────────────
 
 async def cb_admin_result_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -86,7 +85,7 @@ async def cb_admin_result_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if not matches:
         await query.edit_message_text("همه بازی‌ها نتیجه دارن!")
         return ConversationHandler.END
-    txt = "شماره بازی رو بنویس:\n\n"
+    txt = "شماره بازی:\n\n"
     for m in matches[:30]:
         grp = f"[{m['grp']}] " if m["grp"] else ""
         txt += f"<code>#{m['id']}</code> {grp}{m['team1']} vs {m['team2']}\n"
@@ -100,14 +99,13 @@ async def admin_result_id(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         return ADMIN_RESULT_ID
     m = await get_match(mid)
     if not m:
-        await update.message.reply_text(f"بازی #{mid} پیدا نشد!")
-        return ADMIN_RESULT_ID
-    if m["is_finished"]:
-        await update.message.reply_text(f"بازی #{mid} نتیجه داره!")
+        await update.message.reply_text(f"#{mid} پیدا نشد!")
         return ADMIN_RESULT_ID
     ctx.user_data["result_mid"] = mid
+    ctx.user_data["result_stage"] = m["stage"]
     await update.message.reply_text(
-        f"<b>{flag(m['team1'])}{m['team1']} vs {m['team2']}{flag(m['team2'])}</b>\n\nنتیجه (مثلاً <code>2-1</code>):",
+        f"<b>{flag(m['team1'])}{m['team1']} vs {m['team2']}{flag(m['team2'])}</b>\n\n"
+        f"نتیجه ۹۰ دقیقه (مثلاً <code>2-1</code>):",
         parse_mode="HTML")
     return ADMIN_RESULT_SCORE
 
@@ -116,16 +114,45 @@ async def admin_result_score(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if not score:
         await update.message.reply_text("فرمت اشتباه! مثلاً: <code>2-1</code>", parse_mode="HTML")
         return ADMIN_RESULT_SCORE
+    ctx.user_data["result_score"] = score
+    stage = ctx.user_data.get("result_stage","group")
     r1, r2 = score
+    # اگه حذفیه و مساوی، پنالتی بخواه
+    if stage != "group" and r1 == r2:
+        await update.message.reply_text(
+            "مساوی شد! نتیجه پنالتی:\nمثلاً <code>4-2</code> (تیم اول - تیم دوم)\n"
+            "اگه پنالتی نبود <code>-</code> بزن:", parse_mode="HTML")
+        return ADMIN_RESULT_PENALTY
+    # گروهی یا حذفی با برنده
+    return await _finalize_result(update, ctx, None, None)
+
+async def admin_result_penalty(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    txt = update.message.text.strip()
+    if txt == "-":
+        return await _finalize_result(update, ctx, None, None)
+    pen = parse_score(txt)
+    if not pen:
+        await update.message.reply_text("فرمت اشتباه! مثلاً: <code>4-2</code>", parse_mode="HTML")
+        return ADMIN_RESULT_PENALTY
+    return await _finalize_result(update, ctx, pen[0], pen[1])
+
+async def _finalize_result(update, ctx, p1, p2):
     mid = ctx.user_data["result_mid"]
+    r1, r2 = ctx.user_data["result_score"]
     m = await get_match(mid)
-    count = await set_result(mid, r1, r2)
-    await update.message.reply_text(
-        f"✅ <b>ثبت شد!</b>\n\n{flag(m['team1'])}{m['team1']}  <b>{r1}–{r2}</b>  {m['team2']}{flag(m['team2'])}\n\n"
-        f"🎯 امتیاز <b>{count}</b> نفر محاسبه شد!",
-        parse_mode="HTML",
-        reply_markup=Markup([[Btn("✅ نتیجه دیگه", callback_data="admin_result"),
-                              Btn("🛠 پنل", callback_data="adminpanel")]]))
+    count, winner = await set_result(mid, r1, r2, p1, p2)
+
+    txt = (f"✅ <b>ثبت شد!</b>\n\n"
+           f"{flag(m['team1'])}{m['team1']}  <b>{r1}–{r2}</b>  {m['team2']}{flag(m['team2'])}\n")
+    if p1 is not None:
+        txt += f"ضربات پنالتی: {p1}-{p2}\n"
+    if winner:
+        txt += f"🏆 صعود کننده: {flag(winner)}{winner}\n"
+    txt += f"\n🎯 امتیاز <b>{count}</b> نفر محاسبه شد!"
+
+    await update.message.reply_text(txt, parse_mode="HTML", reply_markup=Markup([
+        [Btn("✅ نتیجه دیگه", callback_data="admin_result"),
+         Btn("🛠 پنل", callback_data="adminpanel")]]))
     return ConversationHandler.END
 
 # ── بازی جدید حذفی ────────────────────────────
@@ -146,8 +173,8 @@ async def admin_match_t1(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 async def admin_match_t2(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     ctx.user_data["m_t2"] = update.message.text.strip()
     await update.message.reply_text(
-        "مرحله:\n<code>r32</code> | <code>r16</code> | <code>qf</code> | <code>sf</code> | <code>third</code> | <code>final</code>",
-        parse_mode="HTML")
+        "مرحله:\n<code>r32</code> | <code>r16</code> | <code>qf</code> | "
+        "<code>sf</code> | <code>third</code> | <code>final</code>", parse_mode="HTML")
     return ADMIN_MATCH_STAGE
 
 async def admin_match_stage(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
@@ -189,17 +216,14 @@ async def cb_admin_editmatch_start(update: Update, ctx: ContextTypes.DEFAULT_TYP
     query = update.callback_query
     await query.answer()
     if not is_admin(query.from_user.id): return ConversationHandler.END
-
     stages = ["r32","r16","qf","sf","third","final"]
     matches = []
     for s in stages:
         matches.extend(await get_all_matches(s))
-
     if not matches:
         await query.edit_message_text("هنوز بازی حذفی اضافه نشده!", reply_markup=Markup([
             [Btn("🔙 برگشت", callback_data="adminpanel")]]))
         return ConversationHandler.END
-
     txt = "شماره بازی‌ای که می‌خوای تیم‌هاش رو ویرایش کنی:\n\n"
     for m in matches:
         lbl = STAGE_LABEL.get(m["stage"],{}).get("fa","")
@@ -218,13 +242,12 @@ async def admin_edit_id(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         return ADMIN_EDIT_ID
     ctx.user_data["edit_mid"] = mid
     await update.message.reply_text(
-        f"بازی فعلی: <b>{m['team1']} vs {m['team2']}</b>\n\nنام تیم اول جدید:",
-        parse_mode="HTML")
+        f"فعلی: <b>{m['team1']} vs {m['team2']}</b>\n\nتیم اول جدید:", parse_mode="HTML")
     return ADMIN_EDIT_T1
 
 async def admin_edit_t1(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     ctx.user_data["edit_t1"] = update.message.text.strip()
-    await update.message.reply_text("نام تیم دوم جدید:")
+    await update.message.reply_text("تیم دوم جدید:")
     return ADMIN_EDIT_T2
 
 async def admin_edit_t2(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
@@ -235,8 +258,7 @@ async def admin_edit_t2(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     m = await get_match(mid)
     lbl = STAGE_LABEL.get(m["stage"],{}).get("fa","")
     await update.message.reply_text(
-        f"✅ ویرایش شد!\n\n{lbl}: <b>{flag(t1)}{t1} vs {t2}{flag(t2)}</b>\n\n"
-        f"⚠️ پیش‌بینی‌های قبلی این بازی ریست شدن.",
+        f"✅ ویرایش شد!\n{lbl}: <b>{flag(t1)}{t1} vs {t2}{flag(t2)}</b>",
         parse_mode="HTML",
         reply_markup=Markup([[Btn("✏️ ویرایش دیگه", callback_data="admin_editmatch"),
                               Btn("🛠 پنل", callback_data="adminpanel")]]))
@@ -248,7 +270,8 @@ async def cb_admin_broadcast(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
     if not is_admin(query.from_user.id): return
-    await query.edit_message_text("برای پیام همگانی:\n\n<code>/sendall متن پیام</code>", parse_mode="HTML")
+    await query.edit_message_text(
+        "برای پیام همگانی:\n\n<code>/sendall متن پیام</code>", parse_mode="HTML")
 
 async def cmd_sendall(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if not is_admin(update.effective_user.id): return
@@ -266,31 +289,24 @@ async def cmd_sendall(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             fail += 1
     await update.message.reply_text(f"✅ ارسال شد: {ok} نفر\n❌ ناموفق: {fail} نفر")
 
-# ── تست کامل ──────────────────────────────────
+# ── تست ──────────────────────────────────────
 
 async def cmd_testfull(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if not is_admin(update.effective_user.id):
         await update.message.reply_text("⛔")
         return
     import random
-    await update.message.reply_text("🧪 شروع تست کامل...")
+    await update.message.reply_text("🧪 شروع تست...")
     pool = await get_pool()
-
-    fake_users = [
-        (100000001,"علی رضایی"),(100000002,"مریم احمدی"),
-        (100000003,"رضا کریمی"),(100000004,"سارا محمدی"),
-        (100000005,"امیر حسینی"),
-    ]
+    fake_users = [(100000001,"علی رضایی"),(100000002,"مریم احمدی"),
+                  (100000003,"رضا کریمی"),(100000004,"سارا محمدی"),(100000005,"امیر حسینی")]
     async with pool.acquire() as conn:
         for uid, name in fake_users:
             await conn.execute("""
                 INSERT INTO users(user_id,display_name,lang) VALUES($1,$2,'fa')
                 ON CONFLICT(user_id) DO NOTHING
             """, uid, name)
-    await update.message.reply_text(f"✅ {len(fake_users)} کاربر فیک ساخته شد")
-
     matches = await get_all_matches("group")
-    pred_count = 0
     async with pool.acquire() as conn:
         for m in matches:
             for uid, _ in fake_users:
@@ -300,17 +316,13 @@ async def cmd_testfull(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                     VALUES($1,$2,$3,$4)
                     ON CONFLICT(user_id,match_id) DO UPDATE SET pred1=$3,pred2=$4,points=NULL
                 """, uid, m["id"], p1, p2)
-                pred_count += 1
-    await update.message.reply_text(f"✅ {pred_count} پیش‌بینی رندوم ثبت شد")
-
     scored = 0
     for m in matches:
         if not m["is_finished"]:
             r1, r2 = random.randint(0,4), random.randint(0,4)
             await set_result(m["id"], r1, r2)
             scored += 1
-    await update.message.reply_text(
-        f"✅ {scored} بازی نتیجه گرفت\n\n🏆 حالا /start بزن و جدول رو چک کن!")
+    await update.message.reply_text(f"✅ {scored} بازی نتیجه گرفت\n🏆 جدول رو چک کن!")
 
 async def cmd_cleartestdata(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if not is_admin(update.effective_user.id):
@@ -322,10 +334,11 @@ async def cmd_cleartestdata(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         await conn.execute("DELETE FROM predictions WHERE user_id=ANY($1::bigint[])", fake_ids)
         await conn.execute("DELETE FROM users WHERE user_id=ANY($1::bigint[])", fake_ids)
         await conn.execute("""
-            UPDATE matches SET result1=NULL,result2=NULL,
-            is_locked=FALSE,is_finished=FALSE WHERE stage='group'
+            UPDATE matches SET result1=NULL,result2=NULL,penalty1=NULL,penalty2=NULL,
+            winner_team=NULL,is_locked=FALSE,is_finished=FALSE,
+            notif_sent=FALSE,result_sent=FALSE WHERE stage='group'
         """)
-    await update.message.reply_text("🧹 داده‌های تست پاک شد! بازی‌های گروهی ریست شدن.")
+    await update.message.reply_text("🧹 داده‌های تست پاک شد!")
 
 async def cmd_cancel(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("❌ لغو شد.")
