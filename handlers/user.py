@@ -59,7 +59,8 @@ async def _send_main(send_fn, u, lang):
         [Btn("⚽ پیش‌بینی بازی‌ها" if lang=="fa" else "⚽ Predict Matches",
              callback_data="show_stages")],
         [Btn("📊 امتیاز من" if lang=="fa" else "📊 My Stats", callback_data="mystats"),
-         Btn("🏆 جدول" if lang=="fa" else "🏆 Leaderboard", callback_data="leaderboard")],
+         Btn("🏆 جدول کل" if lang=="fa" else "🏆 Leaderboard", callback_data="leaderboard")],
+        [Btn("🤝 لیگ‌های من" if lang=="fa" else "🤝 My Leagues", callback_data="leagues")],
         [Btn("🌐 تغییر زبان" if lang=="fa" else "🌐 Change Language", callback_data="changelang")],
     ]
     await send_fn(text, parse_mode="HTML", reply_markup=Markup(kb))

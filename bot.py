@@ -1,6 +1,5 @@
 import logging
 import asyncio
-from datetime import timedelta
 
 from telegram.ext import (
     ApplicationBuilder, CommandHandler, CallbackQueryHandler,
@@ -30,19 +29,21 @@ from handlers.admin import (
     ADMIN_MATCH_T1, ADMIN_MATCH_T2, ADMIN_MATCH_STAGE, ADMIN_MATCH_TIME, ADMIN_MATCH_CITY,
     ADMIN_EDIT_ID, ADMIN_EDIT_T1, ADMIN_EDIT_T2,
 )
+from handlers.league import (
+    cb_leagues_menu, cb_lg_create, cb_lg_join, cb_lg_view,
+    cb_lg_leave_ask, cb_lg_leave, cb_lg_delete_ask, cb_lg_delete,
+    handle_league_name, handle_league_code,
+    cmd_cancel as league_cancel,
+    LEAGUE_NAME, LEAGUE_CODE,
+)
 
 logging.basicConfig(format="%(asctime)s [%(levelname)s] %(name)s: %(message)s", level=logging.INFO)
 log = logging.getLogger(__name__)
 
-# ── Scheduler ─────────────────────────────────
+# ── Schedulers ─────────────────────────────────
 
-async def scheduler(bot):
-    """
-    هر ۶۰ ثانیه:
-    - بازی‌های شروع‌شده رو قفل کن
-    - یادآوری ۱ ساعت قبل بفرست
-    - نتایج بازی‌های تموم‌شده رو بگیر و اعلام کن
-    """
+async def main_scheduler(bot):
+    """هر ۶۰ ثانیه: قفل بازی‌ها، یادآوری، چک نتایج."""
     while True:
         try:
             await lock_due_matches()
@@ -51,6 +52,17 @@ async def scheduler(bot):
         except Exception as e:
             log.error(f"Scheduler error: {e}")
         await asyncio.sleep(60)
+
+async def api_sync_scheduler():
+    """هر ۳۰ دقیقه: sync کردن api_id بازی‌ها (مهم برای بازی‌های حذفی که بعداً اضافه میشن)."""
+    # اولین بار بعد ۱۰ ثانیه (برای استارت‌آپ)
+    await asyncio.sleep(10)
+    while True:
+        try:
+            await sync_api_ids()
+        except Exception as e:
+            log.error(f"API sync error: {e}")
+        await asyncio.sleep(30 * 60)
 
 # ── Conversations ──────────────────────────────
 
@@ -97,18 +109,37 @@ def admin_editmatch_conv():
         fallbacks=[CommandHandler("cancel", admin_cancel)],
     )
 
+def league_create_conv():
+    return ConversationHandler(
+        entry_points=[CallbackQueryHandler(cb_lg_create, pattern="^lg_create$")],
+        states={LEAGUE_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, handle_league_name)]},
+        fallbacks=[CommandHandler("cancel", league_cancel)],
+        per_user=True, per_chat=False,
+    )
+
+def league_join_conv():
+    return ConversationHandler(
+        entry_points=[CallbackQueryHandler(cb_lg_join, pattern="^lg_join$")],
+        states={LEAGUE_CODE: [MessageHandler(filters.TEXT & ~filters.COMMAND, handle_league_code)]},
+        fallbacks=[CommandHandler("cancel", league_cancel)],
+        per_user=True, per_chat=False,
+    )
+
 # ── Startup / Shutdown ─────────────────────────
 
 async def post_init(app):
     await init_db()
     await bulk_insert_group_matches(GROUP_MATCHES)
     log.info("✅ DB ready — %d group matches", len(GROUP_MATCHES))
-    asyncio.create_task(scheduler(app.bot))
-    log.info("✅ Scheduler started")
-    asyncio.create_task(sync_api_ids())
-    log.info("✅ API sync started")
+    # task ها رو نگه می‌داریم تا garbage collect نشن
+    app.bot_data["main_task"] = asyncio.create_task(main_scheduler(app.bot))
+    app.bot_data["sync_task"] = asyncio.create_task(api_sync_scheduler())
+    log.info("✅ Schedulers started (main + api-sync every 30min)")
 
 async def post_shutdown(app):
+    for k in ("main_task", "sync_task"):
+        t = app.bot_data.get(k)
+        if t: t.cancel()
     await close_pool()
     log.info("✅ DB pool closed")
 
@@ -125,6 +156,8 @@ def main():
     app.add_handler(admin_result_conv())
     app.add_handler(admin_addmatch_conv())
     app.add_handler(admin_editmatch_conv())
+    app.add_handler(league_create_conv())
+    app.add_handler(league_join_conv())
 
     app.add_handler(CommandHandler("start",         cmd_start))
     app.add_handler(CommandHandler("admin",         cmd_admin))
@@ -145,6 +178,15 @@ def main():
     app.add_handler(CallbackQueryHandler(cb_mystats,     pattern="^mystats$"))
     app.add_handler(CallbackQueryHandler(cb_leaderboard, pattern="^leaderboard$"))
 
+    # ── League ──
+    app.add_handler(CallbackQueryHandler(cb_leagues_menu,   pattern="^leagues$"))
+    app.add_handler(CallbackQueryHandler(cb_lg_view,        pattern=r"^lg_view_\d+$"))
+    app.add_handler(CallbackQueryHandler(cb_lg_leave_ask,   pattern=r"^lg_leaveask_\d+$"))
+    app.add_handler(CallbackQueryHandler(cb_lg_leave,      pattern=r"^lg_leave_\d+$"))
+    app.add_handler(CallbackQueryHandler(cb_lg_delete_ask,  pattern=r"^lg_delask_\d+$"))
+    app.add_handler(CallbackQueryHandler(cb_lg_delete,      pattern=r"^lg_del_\d+$"))
+
+    # ── Admin ──
     app.add_handler(CallbackQueryHandler(cb_adminpanel,         pattern="^adminpanel$"))
     app.add_handler(CallbackQueryHandler(cb_admin_list,         pattern="^admin_list$"))
     app.add_handler(CallbackQueryHandler(cb_admin_broadcast,    pattern="^admin_broadcast$"))

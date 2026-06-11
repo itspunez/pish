@@ -1,4 +1,6 @@
 import asyncpg
+import secrets
+import string
 from datetime import datetime
 from config import DATABASE_URL
 from utils import calc_points
@@ -8,7 +10,10 @@ _pool = None
 async def get_pool():
     global _pool
     if _pool is None:
-        _pool = await asyncpg.create_pool(DATABASE_URL, min_size=2, max_size=10)
+        _pool = await asyncpg.create_pool(
+            DATABASE_URL, min_size=2, max_size=10,
+            max_inactive_connection_lifetime=300,
+        )
     return _pool
 
 async def close_pool():
@@ -61,11 +66,29 @@ async def init_db():
             UNIQUE(user_id, match_id)
         );
 
+        CREATE TABLE IF NOT EXISTS leagues (
+            id           SERIAL PRIMARY KEY,
+            name         TEXT NOT NULL,
+            owner_id     BIGINT NOT NULL REFERENCES users(user_id),
+            invite_code  TEXT NOT NULL UNIQUE,
+            created_at   TIMESTAMPTZ DEFAULT NOW()
+        );
+
+        CREATE TABLE IF NOT EXISTS league_members (
+            league_id  INT NOT NULL REFERENCES leagues(id) ON DELETE CASCADE,
+            user_id    BIGINT NOT NULL REFERENCES users(user_id),
+            joined_at  TIMESTAMPTZ DEFAULT NOW(),
+            PRIMARY KEY(league_id, user_id)
+        );
+
         CREATE INDEX IF NOT EXISTS idx_pred_user      ON predictions(user_id);
+        CREATE INDEX IF NOT EXISTS idx_pred_match     ON predictions(match_id);
         CREATE INDEX IF NOT EXISTS idx_match_stage    ON matches(stage);
         CREATE INDEX IF NOT EXISTS idx_match_time     ON matches(match_time);
         CREATE INDEX IF NOT EXISTS idx_match_finished ON matches(is_finished);
         CREATE INDEX IF NOT EXISTS idx_match_api_id   ON matches(api_id);
+        CREATE INDEX IF NOT EXISTS idx_lm_user        ON league_members(user_id);
+        CREATE INDEX IF NOT EXISTS idx_league_code    ON leagues(invite_code);
         """)
 
 async def bulk_insert_group_matches(matches: list):
@@ -136,23 +159,19 @@ async def get_match(match_id):
         return await conn.fetchrow("SELECT * FROM matches WHERE id=$1", match_id)
 
 async def get_matches_to_notify():
-    """بازی‌هایی که ۱ ساعت دیگه شروع میشن و نوتیف نرفته"""
+    """بازی‌هایی که نهایتاً ۶۵ دقیقه دیگه شروع میشن و نوتیف نرفته
+    (پنجره بزرگ‌تر تا اگه scheduler چند دقیقه عقب افتاد، نوتیف از دست نره)"""
     pool = await get_pool()
     async with pool.acquire() as conn:
         return await conn.fetch("""
             SELECT * FROM matches
             WHERE notif_sent = FALSE
               AND is_finished = FALSE
-              AND match_time BETWEEN NOW() + INTERVAL '55 minutes'
-                                 AND NOW() + INTERVAL '65 minutes'
+              AND match_time > NOW()
+              AND match_time <= NOW() + INTERVAL '65 minutes'
         """)
 
 async def get_matches_to_check_result():
-    """
-    بازی‌هایی که باید نتیجه رو چک کنیم:
-    - گروهی: ۱۰۵ دقیقه از شروع گذشته
-    - حذفی: ۱۰۵ دقیقه از شروع گذشته (ممکنه وقت اضافه بخوره)
-    """
     pool = await get_pool()
     async with pool.acquire() as conn:
         return await conn.fetch("""
@@ -181,67 +200,80 @@ async def add_match(stage, team1, team2, match_time_str, city="", next_match_id=
         return row["id"]
 
 async def update_match_teams(match_id, team1, team2):
+    """عوض کردن تیم‌های یک بازی → پیش‌بینی‌های قبلی پاک میشن
+    (چون تیم‌ها عوض شدن، پیش‌بینی برای تیم‌های قدیمی بی‌معنیه)"""
     pool = await get_pool()
     async with pool.acquire() as conn:
-        await conn.execute("""
-            UPDATE matches SET team1=$1, team2=$2,
-            is_locked=FALSE, is_finished=FALSE,
-            result1=NULL, result2=NULL, penalty1=NULL, penalty2=NULL,
-            winner_team=NULL, result_sent=FALSE
-            WHERE id=$3
-        """, team1, team2, match_id)
+        async with conn.transaction():
+            await conn.execute("DELETE FROM predictions WHERE match_id=$1", match_id)
+            await conn.execute("""
+                UPDATE matches SET team1=$1, team2=$2,
+                is_locked=FALSE, is_finished=FALSE,
+                result1=NULL, result2=NULL, penalty1=NULL, penalty2=NULL,
+                winner_team=NULL, result_sent=FALSE, notif_sent=FALSE
+                WHERE id=$3
+            """, team1, team2, match_id)
 
-async def set_result(match_id, r1, r2, penalty1=None, penalty2=None):
-    """
-    ثبت نتیجه + محاسبه امتیاز + تعیین برنده
-    امتیاز بر اساس نتیجه ۹۰ دقیقه (r1, r2) حساب میشه
-    برنده بر اساس پنالتی (اگه بود) یا نتیجه اصلی
+async def set_result(match_id, r1, r2, penalty1=None, penalty2=None, force=False):
+    """ثبت نتیجه + محاسبه امتیاز + تعیین برنده
+    force=True → حتی اگه بازی finished باشه، نتیجه و امتیازها بازنویسی میشن (اصلاح)
     """
     pool = await get_pool()
     async with pool.acquire() as conn:
-        m = await conn.fetchrow("SELECT * FROM matches WHERE id=$1", match_id)
-        if not m or m["is_finished"]: return 0, None
+        async with conn.transaction():
+            m = await conn.fetchrow("SELECT * FROM matches WHERE id=$1 FOR UPDATE", match_id)
+            if not m:
+                return 0, None, []
+            if m["is_finished"] and not force:
+                return 0, None, []
 
-        # تعیین برنده
-        if penalty1 is not None and penalty2 is not None:
-            winner = m["team1"] if penalty1 > penalty2 else m["team2"]
-        elif r1 > r2:
-            winner = m["team1"]
-        elif r2 > r1:
-            winner = m["team2"]
-        else:
-            winner = None  # مساوی در گروهی
+            if penalty1 is not None and penalty2 is not None:
+                winner = m["team1"] if penalty1 > penalty2 else m["team2"]
+            elif r1 > r2:
+                winner = m["team1"]
+            elif r2 > r1:
+                winner = m["team2"]
+            else:
+                winner = None
 
-        await conn.execute("""
-            UPDATE matches
-            SET result1=$1, result2=$2, penalty1=$3, penalty2=$4,
-                winner_team=$5, is_locked=TRUE, is_finished=TRUE
-            WHERE id=$6
-        """, r1, r2, penalty1, penalty2, winner, match_id)
+            await conn.execute("""
+                UPDATE matches
+                SET result1=$1, result2=$2, penalty1=$3, penalty2=$4,
+                    winner_team=$5, is_locked=TRUE, is_finished=TRUE
+                WHERE id=$6
+            """, r1, r2, penalty1, penalty2, winner, match_id)
 
-        # محاسبه امتیاز — بر اساس نتیجه ۹۰ دقیقه
-        preds = await conn.fetch(
-            "SELECT * FROM predictions WHERE match_id=$1 AND points IS NULL", match_id)
-        for p in preds:
-            pts = calc_points(p["pred1"], p["pred2"], r1, r2)
-            await conn.execute(
-                "UPDATE predictions SET points=$1 WHERE id=$2", pts, p["id"])
-
-        # اگه بازی بعدی داره، تیم برنده رو اضافه کن
-        if winner and m["next_match_id"]:
-            next_m = await conn.fetchrow(
-                "SELECT * FROM matches WHERE id=$1", m["next_match_id"])
-            if next_m:
-                if not next_m["team1"] or next_m["team1"].startswith("TBD"):
+            # محاسبه/بازمحاسبه امتیاز همه پیش‌بینی‌ها (نه فقط NULL)
+            preds = await conn.fetch(
+                "SELECT * FROM predictions WHERE match_id=$1", match_id)
+            changed = []
+            for p in preds:
+                new_pts = calc_points(p["pred1"], p["pred2"], r1, r2)
+                old_pts = p["points"]
+                if old_pts != new_pts:
                     await conn.execute(
-                        "UPDATE matches SET team1=$1 WHERE id=$2",
-                        winner, m["next_match_id"])
-                else:
-                    await conn.execute(
-                        "UPDATE matches SET team2=$1 WHERE id=$2",
-                        winner, m["next_match_id"])
+                        "UPDATE predictions SET points=$1 WHERE id=$2", new_pts, p["id"])
+                    changed.append({
+                        "user_id": p["user_id"],
+                        "pred1": p["pred1"], "pred2": p["pred2"],
+                        "old_pts": old_pts, "new_pts": new_pts,
+                    })
 
-        return len(preds), winner
+            # پر کردن بازی بعدی با برنده
+            if winner and m["next_match_id"]:
+                next_m = await conn.fetchrow(
+                    "SELECT * FROM matches WHERE id=$1", m["next_match_id"])
+                if next_m:
+                    if not next_m["team1"] or next_m["team1"].startswith("TBD"):
+                        await conn.execute(
+                            "UPDATE matches SET team1=$1 WHERE id=$2",
+                            winner, m["next_match_id"])
+                    elif not next_m["team2"] or next_m["team2"].startswith("TBD"):
+                        await conn.execute(
+                            "UPDATE matches SET team2=$1 WHERE id=$2",
+                            winner, m["next_match_id"])
+
+            return len(preds), winner, changed
 
 async def mark_notif_sent(match_id):
     pool = await get_pool()
@@ -258,17 +290,26 @@ async def mark_result_sent(match_id):
 # ── PREDICTIONS ───────────────────────────────
 
 async def save_prediction(user_id, match_id, p1, p2):
+    """ثبت پیش‌بینی — فقط اگه قفل نباشه و هنوز شروع نشده (race-safe)"""
     pool = await get_pool()
     async with pool.acquire() as conn:
-        m = await conn.fetchrow("SELECT is_locked FROM matches WHERE id=$1", match_id)
-        if not m or m["is_locked"]: return False
-        await conn.execute("""
-            INSERT INTO predictions(user_id,match_id,pred1,pred2)
-            VALUES($1,$2,$3,$4)
-            ON CONFLICT(user_id,match_id) DO UPDATE
-              SET pred1=$3,pred2=$4,updated_at=NOW(),points=NULL
-        """, user_id, match_id, p1, p2)
-        return True
+        async with conn.transaction():
+            m = await conn.fetchrow(
+                "SELECT is_locked, match_time FROM matches WHERE id=$1 FOR UPDATE",
+                match_id)
+            if not m or m["is_locked"]:
+                return False
+            ok = await conn.fetchval(
+                "SELECT match_time > NOW() FROM matches WHERE id=$1", match_id)
+            if not ok:
+                return False
+            await conn.execute("""
+                INSERT INTO predictions(user_id,match_id,pred1,pred2)
+                VALUES($1,$2,$3,$4)
+                ON CONFLICT(user_id,match_id) DO UPDATE
+                  SET pred1=$3,pred2=$4,updated_at=NOW(),points=NULL
+            """, user_id, match_id, p1, p2)
+            return True
 
 async def get_prediction(user_id, match_id):
     pool = await get_pool()
@@ -278,14 +319,12 @@ async def get_prediction(user_id, match_id):
             user_id, match_id)
 
 async def get_match_predictions(match_id):
-    """همه پیش‌بینی‌های یک بازی"""
     pool = await get_pool()
     async with pool.acquire() as conn:
         return await conn.fetch(
             "SELECT * FROM predictions WHERE match_id=$1", match_id)
 
 async def count_exact_predictions(match_id):
-    """تعداد کسایی که نتیجه رو دقیق زدن"""
     pool = await get_pool()
     async with pool.acquire() as conn:
         return await conn.fetchval(
@@ -338,12 +377,124 @@ async def leaderboard(limit=50):
         """, limit)
 
 async def get_user_rank(user_id):
+    """رتبه کاربر در رده‌بندی کلی (سازگار با leaderboard — همه کاربرا، نه فقط کسانی که پیش‌بینی کردن)"""
     pool = await get_pool()
     async with pool.acquire() as conn:
         return await conn.fetchval("""
             SELECT rank FROM (
-                SELECT user_id,
-                       RANK() OVER (ORDER BY COALESCE(SUM(points),0) DESC) AS rank
-                FROM predictions GROUP BY user_id
+                SELECT u.user_id,
+                       RANK() OVER (ORDER BY COALESCE(SUM(p.points),0) DESC) AS rank
+                FROM users u LEFT JOIN predictions p ON p.user_id=u.user_id
+                GROUP BY u.user_id
             ) t WHERE user_id=$1
         """, user_id) or 0
+
+# ── LEAGUES ───────────────────────────────────
+
+def _gen_invite_code(n=6):
+    alphabet = string.ascii_uppercase + string.digits
+    # حذف حروف گمراه‌کننده
+    alphabet = alphabet.replace("O","").replace("0","").replace("I","").replace("1","")
+    return "".join(secrets.choice(alphabet) for _ in range(n))
+
+async def create_league(owner_id: int, name: str):
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        # کد یکتا بساز
+        for _ in range(10):
+            code = _gen_invite_code()
+            exists = await conn.fetchval("SELECT 1 FROM leagues WHERE invite_code=$1", code)
+            if not exists:
+                break
+        row = await conn.fetchrow("""
+            INSERT INTO leagues(name, owner_id, invite_code)
+            VALUES($1,$2,$3) RETURNING id, invite_code
+        """, name.strip()[:50], owner_id, code)
+        await conn.execute("""
+            INSERT INTO league_members(league_id, user_id) VALUES($1,$2)
+            ON CONFLICT DO NOTHING
+        """, row["id"], owner_id)
+        return row["id"], row["invite_code"]
+
+async def join_league_by_code(user_id: int, code: str):
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        league = await conn.fetchrow(
+            "SELECT * FROM leagues WHERE UPPER(invite_code)=UPPER($1)", code.strip())
+        if not league:
+            return None, "not_found"
+        already = await conn.fetchval("""
+            SELECT 1 FROM league_members WHERE league_id=$1 AND user_id=$2
+        """, league["id"], user_id)
+        if already:
+            return league, "already"
+        await conn.execute("""
+            INSERT INTO league_members(league_id, user_id) VALUES($1,$2)
+        """, league["id"], user_id)
+        return league, "joined"
+
+async def get_user_leagues(user_id: int):
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        return await conn.fetch("""
+            SELECT l.*, (l.owner_id=$1) AS is_owner,
+                   (SELECT COUNT(*) FROM league_members WHERE league_id=l.id) AS member_count
+            FROM leagues l
+            JOIN league_members lm ON lm.league_id=l.id
+            WHERE lm.user_id=$1
+            ORDER BY l.created_at DESC
+        """, user_id)
+
+async def get_league(league_id: int):
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        return await conn.fetchrow("SELECT * FROM leagues WHERE id=$1", league_id)
+
+async def is_league_member(league_id: int, user_id: int) -> bool:
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        return bool(await conn.fetchval("""
+            SELECT 1 FROM league_members WHERE league_id=$1 AND user_id=$2
+        """, league_id, user_id))
+
+async def league_leaderboard(league_id: int, limit=100):
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        return await conn.fetch("""
+            SELECT u.user_id, u.display_name,
+                   COALESCE(SUM(p.points),0) AS total,
+                   COUNT(p.id) AS preds,
+                   COUNT(*) FILTER (WHERE p.points=10) AS exact_c
+            FROM league_members lm
+            JOIN users u ON u.user_id=lm.user_id
+            LEFT JOIN predictions p ON p.user_id=u.user_id
+            WHERE lm.league_id=$1
+            GROUP BY u.user_id, u.display_name
+            ORDER BY total DESC, preds DESC
+            LIMIT $2
+        """, league_id, limit)
+
+async def leave_league(league_id: int, user_id: int):
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        await conn.execute("""
+            DELETE FROM league_members WHERE league_id=$1 AND user_id=$2
+        """, league_id, user_id)
+
+async def delete_league(league_id: int, owner_id: int) -> bool:
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        league = await conn.fetchrow("SELECT * FROM leagues WHERE id=$1", league_id)
+        if not league or league["owner_id"] != owner_id:
+            return False
+        await conn.execute("DELETE FROM leagues WHERE id=$1", league_id)
+        return True
+
+async def get_league_members(league_id: int):
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        return await conn.fetch("""
+            SELECT u.user_id, u.display_name, u.lang
+            FROM league_members lm JOIN users u ON u.user_id=lm.user_id
+            WHERE lm.league_id=$1
+        """, league_id)

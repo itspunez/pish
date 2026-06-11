@@ -81,14 +81,21 @@ async def cb_admin_result_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
     if not is_admin(query.from_user.id): return ConversationHandler.END
-    matches = [m for m in await get_all_matches() if not m["is_finished"]]
+    # حالا هم بازی‌های تموم‌نشده، هم تموم‌شده (برای اصلاح) قابل انتخاب‌اند
+    matches = await get_all_matches()
     if not matches:
-        await query.edit_message_text("همه بازی‌ها نتیجه دارن!")
+        await query.edit_message_text("هنوز بازی‌ای نیست!")
         return ConversationHandler.END
-    txt = "شماره بازی:\n\n"
-    for m in matches[:30]:
+    txt = "شماره بازی (✏️ اصلاح هم ممکنه):\n\n"
+    for m in matches[:40]:
         grp = f"[{m['grp']}] " if m["grp"] else ""
-        txt += f"<code>#{m['id']}</code> {grp}{m['team1']} vs {m['team2']}\n"
+        if m["is_finished"]:
+            status = f"✅ {m['result1']}-{m['result2']}"
+        elif m["is_locked"]:
+            status = "🔒"
+        else:
+            status = "🟢"
+        txt += f"<code>#{m['id']}</code> {grp}{m['team1']} vs {m['team2']} {status}\n"
     await query.edit_message_text(txt + "\n/cancel لغو", parse_mode="HTML")
     return ADMIN_RESULT_ID
 
@@ -140,19 +147,35 @@ async def _finalize_result(update, ctx, p1, p2):
     mid = ctx.user_data["result_mid"]
     r1, r2 = ctx.user_data["result_score"]
     m = await get_match(mid)
-    count, winner = await set_result(mid, r1, r2, p1, p2)
+    was_finished = bool(m and m["is_finished"])
+    count, winner, changed = await set_result(mid, r1, r2, p1, p2, force=True)
 
-    txt = (f"✅ <b>ثبت شد!</b>\n\n"
+    action = "اصلاح شد" if was_finished else "ثبت شد"
+    txt = (f"✅ <b>{action}!</b>\n\n"
            f"{flag(m['team1'])}{m['team1']}  <b>{r1}–{r2}</b>  {m['team2']}{flag(m['team2'])}\n")
     if p1 is not None:
         txt += f"ضربات پنالتی: {p1}-{p2}\n"
     if winner:
         txt += f"🏆 صعود کننده: {flag(winner)}{winner}\n"
-    txt += f"\n🎯 امتیاز <b>{count}</b> نفر محاسبه شد!"
+    if was_finished:
+        txt += f"\n🔧 <b>{len(changed)}</b> امتیاز تغییر کرد و به کاربرها اطلاع داده شد."
+    else:
+        txt += f"\n🎯 امتیاز <b>{count}</b> پیش‌بینی محاسبه شد!"
 
     await update.message.reply_text(txt, parse_mode="HTML", reply_markup=Markup([
         [Btn("✅ نتیجه دیگه", callback_data="admin_result"),
          Btn("🛠 پنل", callback_data="adminpanel")]]))
+
+    # نوتیف اصلاح به کاربرهایی که امتیازشون عوض شد (فقط برای اصلاح)
+    if was_finished and changed:
+        from notifier import announce_result_correction
+        m_fresh = await get_match(mid)
+        try:
+            await announce_result_correction(
+                update.get_bot(), m_fresh, r1, r2, p1, p2, changed)
+        except Exception:
+            pass
+
     return ConversationHandler.END
 
 # ── بازی جدید حذفی ────────────────────────────
@@ -254,11 +277,14 @@ async def admin_edit_t2(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     t1 = ctx.user_data["edit_t1"]
     t2 = update.message.text.strip()
     mid = ctx.user_data["edit_mid"]
+    # هشدار: پیش‌بینی‌های قبلی پاک میشن چون تیم‌ها عوض شدن
     await update_match_teams(mid, t1, t2)
     m = await get_match(mid)
     lbl = STAGE_LABEL.get(m["stage"],{}).get("fa","")
     await update.message.reply_text(
-        f"✅ ویرایش شد!\n{lbl}: <b>{flag(t1)}{t1} vs {t2}{flag(t2)}</b>",
+        f"✅ ویرایش شد!\n{lbl}: <b>{flag(t1)}{t1} vs {t2}{flag(t2)}</b>\n\n"
+        f"⚠️ پیش‌بینی‌های قبلی این بازی پاک شدن (چون تیم‌ها عوض شدن).\n"
+        f"کاربرها می‌تونن دوباره پیش‌بینی کنن.",
         parse_mode="HTML",
         reply_markup=Markup([[Btn("✏️ ویرایش دیگه", callback_data="admin_editmatch"),
                               Btn("🛠 پنل", callback_data="adminpanel")]]))
