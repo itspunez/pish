@@ -70,8 +70,12 @@ def predict_conv():
     return ConversationHandler(
         entry_points=[CallbackQueryHandler(cb_predict_start, pattern=r"^predict_\d+$")],
         states={PREDICT_INPUT: [MessageHandler(filters.TEXT & ~filters.COMMAND, handle_prediction_input)]},
-        fallbacks=[CommandHandler("cancel", cmd_cancel)],
+        fallbacks=[
+            CommandHandler("cancel", cmd_cancel),
+            CommandHandler("start", cmd_start),
+        ],
         per_user=True, per_chat=False,
+        allow_reentry=True,
     )
 
 def admin_result_conv():
@@ -82,7 +86,11 @@ def admin_result_conv():
             ADMIN_RESULT_SCORE:   [MessageHandler(filters.TEXT & ~filters.COMMAND, admin_result_score)],
             ADMIN_RESULT_PENALTY: [MessageHandler(filters.TEXT & ~filters.COMMAND, admin_result_penalty)],
         },
-        fallbacks=[CommandHandler("cancel", admin_cancel)],
+        fallbacks=[
+            CommandHandler("cancel", admin_cancel),
+            CommandHandler("start", cmd_start),
+        ],
+        allow_reentry=True,
     )
 
 def admin_addmatch_conv():
@@ -95,7 +103,11 @@ def admin_addmatch_conv():
             ADMIN_MATCH_TIME:  [MessageHandler(filters.TEXT & ~filters.COMMAND, admin_match_time)],
             ADMIN_MATCH_CITY:  [MessageHandler(filters.TEXT & ~filters.COMMAND, admin_match_city)],
         },
-        fallbacks=[CommandHandler("cancel", admin_cancel)],
+        fallbacks=[
+            CommandHandler("cancel", admin_cancel),
+            CommandHandler("start", cmd_start),
+        ],
+        allow_reentry=True,
     )
 
 def admin_editmatch_conv():
@@ -106,23 +118,35 @@ def admin_editmatch_conv():
             ADMIN_EDIT_T1: [MessageHandler(filters.TEXT & ~filters.COMMAND, admin_edit_t1)],
             ADMIN_EDIT_T2: [MessageHandler(filters.TEXT & ~filters.COMMAND, admin_edit_t2)],
         },
-        fallbacks=[CommandHandler("cancel", admin_cancel)],
+        fallbacks=[
+            CommandHandler("cancel", admin_cancel),
+            CommandHandler("start", cmd_start),
+        ],
+        allow_reentry=True,
     )
 
 def league_create_conv():
     return ConversationHandler(
         entry_points=[CallbackQueryHandler(cb_lg_create, pattern="^lg_create$")],
         states={LEAGUE_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, handle_league_name)]},
-        fallbacks=[CommandHandler("cancel", league_cancel)],
+        fallbacks=[
+            CommandHandler("cancel", league_cancel),
+            CommandHandler("start", cmd_start),
+        ],
         per_user=True, per_chat=False,
+        allow_reentry=True,
     )
 
 def league_join_conv():
     return ConversationHandler(
         entry_points=[CallbackQueryHandler(cb_lg_join, pattern="^lg_join$")],
         states={LEAGUE_CODE: [MessageHandler(filters.TEXT & ~filters.COMMAND, handle_league_code)]},
-        fallbacks=[CommandHandler("cancel", league_cancel)],
+        fallbacks=[
+            CommandHandler("cancel", league_cancel),
+            CommandHandler("start", cmd_start),
+        ],
         per_user=True, per_chat=False,
+        allow_reentry=True,
     )
 
 # ── Startup / Shutdown ─────────────────────────

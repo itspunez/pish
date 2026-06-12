@@ -194,6 +194,10 @@ async def get_matches_to_notify():
         """)
 
 async def get_matches_to_check_result():
+    """بازی‌هایی که باید نتیجه‌شون چک بشه:
+    از دقیقه ۹۰ به بعد شروع به polling میکنیم (هر ۶۰ ثانیه یه بار)
+    تا وقتی API وضعیت FINISHED برگردونه.
+    """
     pool = await get_pool()
     async with pool.acquire() as conn:
         return await conn.fetch("""
@@ -201,7 +205,7 @@ async def get_matches_to_check_result():
             WHERE is_finished = FALSE
               AND is_locked = TRUE
               AND result_sent = FALSE
-              AND match_time + INTERVAL '105 minutes' <= NOW()
+              AND match_time + INTERVAL '90 minutes' <= NOW()
         """)
 
 async def lock_due_matches():
@@ -239,6 +243,9 @@ async def update_match_teams(match_id, team1, team2):
 async def set_result(match_id, r1, r2, penalty1=None, penalty2=None, force=False):
     """ثبت نتیجه + محاسبه امتیاز + تعیین برنده
     force=True → حتی اگه بازی finished باشه، نتیجه و امتیازها بازنویسی میشن (اصلاح)
+
+    امتیازدهی همیشه بر اساس نتیجه ۹۰ دقیقه (r1, r2) انجام میشه.
+    برای پر کردن جدول مراحل حذفی، اگه تساوی بود از پنالتی برنده مشخص میشه.
     """
     pool = await get_pool()
     async with pool.acquire() as conn:
@@ -249,21 +256,28 @@ async def set_result(match_id, r1, r2, penalty1=None, penalty2=None, force=False
             if m["is_finished"] and not force:
                 return 0, None, []
 
-            if penalty1 is not None and penalty2 is not None:
-                winner = m["team1"] if penalty1 > penalty2 else m["team2"]
-            elif r1 > r2:
-                winner = m["team1"]
+            # برنده برای امتیازدهی: فقط بر اساس ۹۰ دقیقه
+            if r1 > r2:
+                scoring_winner = m["team1"]
             elif r2 > r1:
-                winner = m["team2"]
+                scoring_winner = m["team2"]
             else:
-                winner = None
+                scoring_winner = None  # تساوی → امتیاز تساوی
+
+            # برنده برای پر کردن بازی بعدی (جدول): اگه تساوی بود از پنالتی استفاده میشه
+            if scoring_winner:
+                bracket_winner = scoring_winner
+            elif penalty1 is not None and penalty2 is not None:
+                bracket_winner = m["team1"] if penalty1 > penalty2 else m["team2"]
+            else:
+                bracket_winner = None
 
             await conn.execute("""
                 UPDATE matches
                 SET result1=$1, result2=$2, penalty1=$3, penalty2=$4,
                     winner_team=$5, is_locked=TRUE, is_finished=TRUE
                 WHERE id=$6
-            """, r1, r2, penalty1, penalty2, winner, match_id)
+            """, r1, r2, penalty1, penalty2, bracket_winner, match_id)
 
             # محاسبه/بازمحاسبه امتیاز همه پیش‌بینی‌ها (نه فقط NULL)
             preds = await conn.fetch(
@@ -281,21 +295,22 @@ async def set_result(match_id, r1, r2, penalty1=None, penalty2=None, force=False
                         "old_pts": old_pts, "new_pts": new_pts,
                     })
 
-            # پر کردن بازی بعدی با برنده
-            if winner and m["next_match_id"]:
+            # پر کردن بازی بعدی با برنده جدول (bracket_winner)
+            if bracket_winner and m["next_match_id"]:
                 next_m = await conn.fetchrow(
                     "SELECT * FROM matches WHERE id=$1", m["next_match_id"])
                 if next_m:
                     if not next_m["team1"] or next_m["team1"].startswith("TBD"):
                         await conn.execute(
                             "UPDATE matches SET team1=$1 WHERE id=$2",
-                            winner, m["next_match_id"])
+                            bracket_winner, m["next_match_id"])
                     elif not next_m["team2"] or next_m["team2"].startswith("TBD"):
                         await conn.execute(
                             "UPDATE matches SET team2=$1 WHERE id=$2",
-                            winner, m["next_match_id"])
+                            bracket_winner, m["next_match_id"])
 
-            return len(preds), winner, changed
+            return len(preds), bracket_winner, changed
+
 
 async def mark_notif_sent(match_id):
     pool = await get_pool()

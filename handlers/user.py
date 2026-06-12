@@ -337,7 +337,11 @@ async def _get_next_group(current_grp, round_no):
 async def cmd_cancel(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     user = await get_user(update.effective_user.id)
     lang = user["lang"] if user else "fa"
-    await update.message.reply_text("❌ لغو شد." if lang=="fa" else "❌ Cancelled.")
+    msg = "❌ لغو شد." if lang == "fa" else "❌ Cancelled."
+    await update.message.reply_text(msg)
+    # بعد از لغو، منوی اصلی رو نشون بده
+    if user:
+        await _send_main(update.message.reply_text, update.effective_user, lang)
     return ConversationHandler.END
 
 async def cb_mystats(update: Update, ctx: ContextTypes.DEFAULT_TYPE):

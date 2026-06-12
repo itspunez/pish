@@ -367,5 +367,6 @@ async def cmd_cleartestdata(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("🧹 داده‌های تست پاک شد!")
 
 async def cmd_cancel(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("❌ لغو شد.")
+    await update.message.reply_text("❌ لغو شد. برای شروع /start بزن.")
     return ConversationHandler.END
+

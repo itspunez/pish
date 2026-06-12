@@ -83,7 +83,8 @@ async def _handle_group_result(bot: Bot, m):
         log.warning(f"Match {m['id']} ({m['team1']} vs {m['team2']}) has no api_id")
         return
     result = await get_match_result(m["api_id"])
-    if not result or result["status"] != "FINISHED":
+    # اگه بازی هنوز تموم نشده، این دور رد میکنیم — دور بعدی دوباره چک میشه
+    if not result or result["status"] not in ("FINISHED", "FT", "AET", "PEN"):
         return
     if result["home_score"] is None:
         return
@@ -97,11 +98,18 @@ async def _handle_knockout_result(bot: Bot, m):
         log.warning(f"Knockout match {m['id']} ({m['team1']} vs {m['team2']}) has no api_id")
         return
     result = await get_match_result(m["api_id"])
-    if not result or result["status"] != "FINISHED":
+    # اگه بازی هنوز تموم نشده (در حال بازی یا وقت اضافه)، این دور رد میکنیم
+    if not result or result["status"] not in ("FINISHED", "FT", "AET", "PEN"):
         return
-    r1 = result["home_score"]; r2 = result["away_score"]
-    p1 = result["penalty_home"]; p2 = result["penalty_away"]
-    if r1 is None: return
+    # نتیجه ۹۰ دقیقه — برای امتیازدهی فقط این مهمه
+    r1 = result["home_score"]
+    r2 = result["away_score"]
+    if r1 is None:
+        return
+    # پنالتی رو فقط برای نمایش (اعلام برنده) نگه میداریم، نه امتیازدهی
+    p1 = result.get("penalty_home")
+    p2 = result.get("penalty_away")
+    # set_result با نتیجه ۹۰ دقیقه — اگه تساوی بود امتیاز تساوی میگیره (درست)
     count, winner, _ = await set_result(m["id"], r1, r2, p1, p2)
     await mark_result_sent(m["id"])
     await _announce_result(bot, m, r1, r2, p1, p2, count, winner)
