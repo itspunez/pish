@@ -7,8 +7,8 @@ from telegram.ext import (
 )
 
 from config import BOT_TOKEN
-from database import init_db, bulk_insert_group_matches, close_pool, lock_due_matches
-from wc_data import GROUP_MATCHES
+from database import init_db, bulk_insert_group_matches, bulk_insert_knockout_matches, close_pool, lock_due_matches
+from wc_data import GROUP_MATCHES, KNOCKOUT_MATCHES
 from notifier import send_reminders, check_and_announce_results, sync_api_ids
 from handlers.user import (
     cmd_start, cb_lang, cb_show_stages, cb_stage, cb_round, cb_group,
@@ -130,7 +130,9 @@ def league_join_conv():
 async def post_init(app):
     await init_db()
     await bulk_insert_group_matches(GROUP_MATCHES)
-    log.info("✅ DB ready — %d group matches", len(GROUP_MATCHES))
+    await bulk_insert_knockout_matches(KNOCKOUT_MATCHES)
+    log.info("✅ DB ready — %d group + %d knockout matches",
+             len(GROUP_MATCHES), len(KNOCKOUT_MATCHES))
     # task ها رو نگه می‌داریم تا garbage collect نشن
     app.bot_data["main_task"] = asyncio.create_task(main_scheduler(app.bot))
     app.bot_data["sync_task"] = asyncio.create_task(api_sync_scheduler())

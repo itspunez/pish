@@ -103,7 +103,29 @@ async def bulk_insert_group_matches(matches: list):
         """, [(m[0], m[1], m[2], m[3],
                datetime.fromisoformat(m[4]+":00+00:00"), m[5]) for m in matches])
 
+async def bulk_insert_knockout_matches(matches: list):
+    """درج بازی‌های مراحل حذفی (r32, r16, qf, sf, third, final).
+    ایدمپوتنت: اگه از قبل برای اون مرحله ردیفی داشته باشیم، رد می‌شه.
+    دیتا و پیش‌بینی‌های موجود رو دست نمی‌زنه."""
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        # گروه‌بندی بر اساس stage برای چک ایدمپوتنت
+        by_stage = {}
+        for m in matches:
+            by_stage.setdefault(m[0], []).append(m)
+        for stage, rows in by_stage.items():
+            count = await conn.fetchval(
+                "SELECT COUNT(*) FROM matches WHERE stage=$1", stage)
+            if count > 0:
+                continue  # قبلاً درج شده، رد شو
+            await conn.executemany("""
+                INSERT INTO matches(api_id, stage, team1, team2, match_time, city)
+                VALUES($1, $2, $3, $4, $5, $6)
+            """, [(m[1], m[0], m[2], m[3],
+                   datetime.fromisoformat(m[4]+":00+00:00"), m[5]) for m in rows])
+
 # ── USERS ─────────────────────────────────────
+
 
 async def upsert_user(user_id, display_name, lang="fa"):
     pool = await get_pool()
@@ -290,14 +312,18 @@ async def mark_result_sent(match_id):
 # ── PREDICTIONS ───────────────────────────────
 
 async def save_prediction(user_id, match_id, p1, p2):
-    """ثبت پیش‌بینی — فقط اگه قفل نباشه و هنوز شروع نشده (race-safe)"""
+    """ثبت پیش‌بینی — فقط اگه قفل نباشه، هنوز شروع نشده و تیم‌ها مشخص شده باشن"""
+    from wc_data import is_placeholder_team
     pool = await get_pool()
     async with pool.acquire() as conn:
         async with conn.transaction():
             m = await conn.fetchrow(
-                "SELECT is_locked, match_time FROM matches WHERE id=$1 FOR UPDATE",
+                "SELECT is_locked, match_time, team1, team2 FROM matches WHERE id=$1 FOR UPDATE",
                 match_id)
             if not m or m["is_locked"]:
+                return False
+            # اگه تیم‌ها هنوز placeholder هستن (مثل 1A یا W77) پیش‌بینی مجاز نیست
+            if is_placeholder_team(m["team1"]) or is_placeholder_team(m["team2"]):
                 return False
             ok = await conn.fetchval(
                 "SELECT match_time > NOW() FROM matches WHERE id=$1", match_id)

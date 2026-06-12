@@ -1,10 +1,11 @@
 import re
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from wc_data import TEAM_FLAG, TEAM_FA
 from config import POINTS
 
 MONTHS_FA = ["","ژانویه","فوریه","مارس","آوریل","مه","ژوئن",
              "ژوئیه","اوت","سپتامبر","اکتبر","نوامبر","دسامبر"]
+IRAN_OFFSET = timedelta(hours=3, minutes=30)
 
 def flag(team: str) -> str:
     return TEAM_FLAG.get(team, "🏳️")
@@ -18,7 +19,8 @@ def fmt_time(dt_utc: datetime, lang: str) -> str:
         if isinstance(dt_utc, str):
             dt_utc = datetime.fromisoformat(dt_utc.replace("Z","").split("+")[0])
         if lang == "fa":
-            return f"{dt_utc.day} {MONTHS_FA[dt_utc.month]}، ساعت {dt_utc.strftime('%H:%M')} (UTC)"
+            dt_ir = dt_utc + IRAN_OFFSET
+            return f"{dt_ir.day} {MONTHS_FA[dt_ir.month]}، ساعت {dt_ir.strftime('%H:%M')} (ایران)"
         return dt_utc.strftime("%b %d, %H:%M UTC")
     except Exception:
         return str(dt_utc)
