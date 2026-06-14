@@ -216,6 +216,24 @@ async def lock_due_matches():
             WHERE match_time <= NOW() AND is_locked=FALSE
         """)
 
+async def lock_match(match_id: int) -> bool:
+    """قفل دستی یک بازی توسط ادمین (بدون تموم کردن)"""
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow(
+            "UPDATE matches SET is_locked=TRUE WHERE id=$1 AND is_finished=FALSE RETURNING id",
+            match_id)
+        return row is not None
+
+async def unlock_match(match_id: int) -> bool:
+    """باز کردن دستی یک بازی توسط ادمین (فقط اگه تموم نشده)"""
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow(
+            "UPDATE matches SET is_locked=FALSE WHERE id=$1 AND is_finished=FALSE RETURNING id",
+            match_id)
+        return row is not None
+
 async def add_match(stage, team1, team2, match_time_str, city="", next_match_id=None):
     pool = await get_pool()
     async with pool.acquire() as conn:

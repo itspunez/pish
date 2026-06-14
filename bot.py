@@ -1,12 +1,15 @@
 import logging
 import asyncio
 
+from telegram import Update
 from telegram.ext import (
-    ApplicationBuilder, CommandHandler, CallbackQueryHandler,
-    MessageHandler, ConversationHandler, filters
+    ApplicationBuilder, ApplicationHandlerStop, CommandHandler, CallbackQueryHandler,
+    MessageHandler, ConversationHandler, TypeHandler, ContextTypes, filters
 )
 
-from config import BOT_TOKEN
+from config import BOT_TOKEN, ADMIN_IDS
+from maintenance import is_maintenance
+
 from database import init_db, bulk_insert_group_matches, bulk_insert_knockout_matches, close_pool, lock_due_matches
 from wc_data import GROUP_MATCHES, KNOCKOUT_MATCHES
 from notifier import send_reminders, check_and_announce_results, sync_api_ids
@@ -23,11 +26,13 @@ from handlers.admin import (
     admin_match_stage, admin_match_time, admin_match_city,
     cb_admin_editmatch_start, admin_edit_id, admin_edit_t1, admin_edit_t2,
     cb_admin_broadcast, cmd_sendall, cb_toggle_maintenance,
+    cb_admin_lock_start, admin_lock_id,
     cmd_testfull, cmd_cleartestdata,
     cmd_cancel as admin_cancel,
     ADMIN_RESULT_ID, ADMIN_RESULT_SCORE, ADMIN_RESULT_PENALTY,
     ADMIN_MATCH_T1, ADMIN_MATCH_T2, ADMIN_MATCH_STAGE, ADMIN_MATCH_TIME, ADMIN_MATCH_CITY,
     ADMIN_EDIT_ID, ADMIN_EDIT_T1, ADMIN_EDIT_T2,
+    ADMIN_LOCK_ID,
 )
 from handlers.league import (
     cb_leagues_menu, cb_lg_create, cb_lg_join, cb_lg_view,
@@ -149,6 +154,40 @@ def league_join_conv():
         allow_reentry=True,
     )
 
+# ── Maintenance gate ───────────────────────────
+
+async def maintenance_gate(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """قبل از هر هندلر اجرا میشه. اگه بات در حالت تعمیر باشه و کاربر ادمین نباشه،
+    پاسخ کوتاه می‌ده و جلوی پردازش بقیه هندلرها (شامل منوهای باز) رو می‌گیره."""
+    if not is_maintenance():
+        return
+    user = update.effective_user
+    if user and user.id in ADMIN_IDS:
+        return  # ادمین‌ها بدون محدودیت
+    try:
+        if update.callback_query:
+            await update.callback_query.answer(
+                "🔧 بات موقتاً در حال تعمیر است.", show_alert=True)
+        elif update.effective_message:
+            await update.effective_message.reply_text(
+                "🔧 بات موقتاً در حال تعمیر است. به زودی برمی‌گردیم!")
+    except Exception:
+        pass
+    raise ApplicationHandlerStop
+
+def admin_lock_conv():
+    return ConversationHandler(
+        entry_points=[CallbackQueryHandler(cb_admin_lock_start, pattern="^admin_lock$")],
+        states={
+            ADMIN_LOCK_ID: [MessageHandler(filters.TEXT & ~filters.COMMAND, admin_lock_id)],
+        },
+        fallbacks=[
+            CommandHandler("cancel", admin_cancel),
+            CommandHandler("start", cmd_start),
+        ],
+        allow_reentry=True,
+    )
+
 # ── Startup / Shutdown ─────────────────────────
 
 async def post_init(app):
@@ -178,10 +217,14 @@ def main():
            .post_shutdown(post_shutdown)
            .build())
 
+    # دروازه‌ی Maintenance — قبل از همه (group=-1) چک می‌کنه و جلوی بقیه رو می‌گیره
+    app.add_handler(TypeHandler(Update, maintenance_gate), group=-1)
+
     app.add_handler(predict_conv())
     app.add_handler(admin_result_conv())
     app.add_handler(admin_addmatch_conv())
     app.add_handler(admin_editmatch_conv())
+    app.add_handler(admin_lock_conv())
     app.add_handler(league_create_conv())
     app.add_handler(league_join_conv())
 

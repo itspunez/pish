@@ -2,7 +2,8 @@ from telegram import Update, InlineKeyboardButton as Btn, InlineKeyboardMarkup a
 from telegram.ext import ContextTypes, ConversationHandler
 
 from database import (get_all_matches, get_match, set_result, add_match,
-                      update_match_teams, get_all_users, get_pool)
+                      update_match_teams, get_all_users, get_pool,
+                      lock_match, unlock_match)
 from config import ADMIN_IDS
 from utils import flag, fmt_time, parse_score
 from maintenance import is_maintenance, set_maintenance
@@ -11,6 +12,7 @@ from wc_data import STAGE_LABEL
 ADMIN_RESULT_ID, ADMIN_RESULT_SCORE, ADMIN_RESULT_PENALTY = range(20, 23)
 ADMIN_MATCH_T1, ADMIN_MATCH_T2, ADMIN_MATCH_STAGE, ADMIN_MATCH_TIME, ADMIN_MATCH_CITY = range(30, 35)
 ADMIN_EDIT_ID, ADMIN_EDIT_T1, ADMIN_EDIT_T2 = range(40, 43)
+ADMIN_LOCK_ID, = range(50, 51)
 
 def is_admin(uid): return uid in ADMIN_IDS
 
@@ -35,6 +37,7 @@ async def _admin_menu(send):
         reply_markup=Markup([
             [Btn("📋 لیست بازی‌ها", callback_data="admin_list")],
             [Btn("✅ ثبت نتیجه دستی", callback_data="admin_result")],
+            [Btn("🔒 قفل/باز کردن بازی", callback_data="admin_lock")],
             [Btn("➕ بازی جدید (حذفی)", callback_data="admin_addmatch")],
             [Btn("✏️ ویرایش تیم‌های حذفی", callback_data="admin_editmatch")],
             [Btn("📢 پیام همگانی", callback_data="admin_broadcast")],
@@ -166,15 +169,24 @@ async def _finalize_result(update, ctx, p1, p2):
         [Btn("✅ نتیجه دیگه", callback_data="admin_result"),
          Btn("🛠 پنل", callback_data="adminpanel")]]))
 
-    # نوتیف اصلاح به کاربرهایی که امتیازشون عوض شد (فقط برای اصلاح)
-    if was_finished and changed:
-        from notifier import announce_result_correction
-        m_fresh = await get_match(mid)
-        try:
-            await announce_result_correction(
-                update.get_bot(), m_fresh, r1, r2, p1, p2, changed)
-        except Exception:
-            pass
+    # نوتیف به کاربرها
+    m_fresh = await get_match(mid)
+    try:
+        if was_finished:
+            # فقط به کسایی که امتیازشون عوض شد
+            if changed:
+                from notifier import announce_result_correction
+                await announce_result_correction(
+                    update.get_bot(), m_fresh, r1, r2, p1, p2, changed)
+        else:
+            # ثبت اولیه دستی → اعلام عمومی مثل حالت API
+            from notifier import _announce_result
+            from database import mark_result_sent
+            await mark_result_sent(mid)
+            await _announce_result(update.get_bot(), m_fresh, r1, r2, p1, p2, count, winner)
+    except Exception as e:
+        import logging
+        logging.getLogger(__name__).warning(f"Manual result announce failed: {e}")
 
     return ConversationHandler.END
 
@@ -370,3 +382,50 @@ async def cmd_cancel(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("❌ لغو شد. برای شروع /start بزن.")
     return ConversationHandler.END
 
+
+# ── قفل / باز کردن دستی بازی ─────────────────
+
+async def cb_admin_lock_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    if not is_admin(query.from_user.id):
+        return ConversationHandler.END
+    matches = await get_all_matches()
+    open_matches = [m for m in matches if not m["is_finished"]]
+    if not open_matches:
+        await query.edit_message_text("بازی بازی برای قفل/باز کردن نیست!", reply_markup=Markup([
+            [Btn("🔙 برگشت", callback_data="adminpanel")]]))
+        return ConversationHandler.END
+    txt = "شماره بازی برای قفل/باز کردن:\n(🔒 = قفل، 🟢 = باز)\n\n"
+    for m in open_matches[:50]:
+        grp = f"[{m['grp']}] " if m["grp"] else ""
+        status = "🔒" if m["is_locked"] else "🟢"
+        txt += f"<code>#{m['id']}</code> {grp}{m['team1']} vs {m['team2']} {status}\n"
+    await query.edit_message_text(txt + "\n/cancel لغو", parse_mode="HTML")
+    return ADMIN_LOCK_ID
+
+async def admin_lock_id(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    try:
+        mid = int(update.message.text.strip().lstrip("#"))
+    except ValueError:
+        await update.message.reply_text("عدد بنویس:")
+        return ADMIN_LOCK_ID
+    m = await get_match(mid)
+    if not m:
+        await update.message.reply_text(f"#{mid} پیدا نشد!")
+        return ADMIN_LOCK_ID
+    if m["is_finished"]:
+        await update.message.reply_text("این بازی تموم شده — نمی‌شه قفل/باز کرد.")
+        return ConversationHandler.END
+    if m["is_locked"]:
+        ok = await unlock_match(mid)
+        msg = "🟢 باز شد — کاربرها دوباره می‌تونن پیش‌بینی کنن." if ok else "خطا!"
+    else:
+        ok = await lock_match(mid)
+        msg = "🔒 قفل شد — پیش‌بینی جدید ممکن نیست." if ok else "خطا!"
+    await update.message.reply_text(
+        f"<b>{flag(m['team1'])}{m['team1']} vs {m['team2']}{flag(m['team2'])}</b>\n{msg}",
+        parse_mode="HTML",
+        reply_markup=Markup([[Btn("🔒 بازی دیگه", callback_data="admin_lock"),
+                              Btn("🛠 پنل", callback_data="adminpanel")]]))
+    return ConversationHandler.END
