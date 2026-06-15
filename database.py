@@ -124,6 +124,64 @@ async def bulk_insert_knockout_matches(matches: list):
             """, [(m[1], m[0], m[2], m[3],
                    datetime.fromisoformat(m[4]+":00+00:00"), m[5]) for m in rows])
 
+async def sync_match_schedules(group_matches: list, knockout_matches: list):
+    """به‌روزرسانی غیرتخریبی تاریخ/ساعت/شهر بازی‌ها از روی wc_data.py.
+    فقط ستون‌های match_time و city به‌روز میشن. تیم‌ها، نتایج، پیش‌بینی‌ها
+    و بقیه‌ی دیتا دست نخورده باقی می‌مونن. بازی‌های قفل‌شده یا تمام‌شده
+    رد میشن تا یادآوری‌های ارسال‌شده دوباره ارسال نشن.
+    خروجی: تعداد ردیف‌های آپدیت‌شده."""
+    pool = await get_pool()
+    updated = 0
+    async with pool.acquire() as conn:
+        # --- مرحله گروهی: تطابق بر اساس (grp, round_no, جفت تیم بدون توجه به ترتیب)
+        for m in group_matches:
+            grp, round_no, t1, t2, utc_str, city = m
+            new_dt = datetime.fromisoformat(utc_str + ":00+00:00")
+            res = await conn.execute("""
+                UPDATE matches
+                   SET match_time = $1, city = $2
+                 WHERE stage = 'group'
+                   AND grp = $3
+                   AND round_no = $4
+                   AND ((team1 = $5 AND team2 = $6) OR (team1 = $6 AND team2 = $5))
+                   AND is_finished = FALSE
+                   AND is_locked   = FALSE
+                   AND (match_time IS DISTINCT FROM $1 OR COALESCE(city,'') IS DISTINCT FROM $2)
+            """, new_dt, city, grp, round_no, t1, t2)
+            try:
+                updated += int(res.split()[-1])
+            except Exception:
+                pass
+
+        # --- مراحل حذفی: تطابق بر اساس api_id (شماره بازی 73..104)
+        for m in knockout_matches:
+            stage, match_no, _t1, _t2, utc_str, city = m
+            new_dt = datetime.fromisoformat(utc_str + ":00+00:00")
+            res = await conn.execute("""
+                UPDATE matches
+                   SET match_time = $1, city = $2
+                 WHERE stage   = $3
+                   AND api_id  = $4
+                   AND is_finished = FALSE
+                   AND is_locked   = FALSE
+                   AND (match_time IS DISTINCT FROM $1 OR COALESCE(city,'') IS DISTINCT FROM $2)
+            """, new_dt, city, stage, match_no)
+            try:
+                updated += int(res.split()[-1])
+            except Exception:
+                pass
+
+        # بعد از تغییر زمان، اگه بازی هنوز در آینده‌ست، یادآوری باید دوباره ارسال بشه
+        await conn.execute("""
+            UPDATE matches
+               SET notif_sent = FALSE
+             WHERE is_finished = FALSE
+               AND is_locked   = FALSE
+               AND notif_sent  = TRUE
+               AND match_time > NOW() + INTERVAL '65 minutes'
+        """)
+    return updated
+
 # ── USERS ─────────────────────────────────────
 
 

@@ -14,13 +14,14 @@ def tname(team: str, lang: str) -> str:
     return TEAM_FA.get(team, team) if lang == "fa" else team
 
 def fmt_time(dt_utc: datetime, lang: str) -> str:
-    """datetime object یا string رو به ساعت نمایشی تبدیل می‌کنه"""
+    """datetime object یا string رو به ساعت نمایشی (UTC) تبدیل می‌کنه.
+    همه ساعت‌ها به وقت جهانی UTC نمایش داده میشن."""
     try:
         if isinstance(dt_utc, str):
             dt_utc = datetime.fromisoformat(dt_utc.replace("Z","").split("+")[0])
+        # همه‌ی نمایش‌ها به وقت UTC (ساعت جهانی)
         if lang == "fa":
-            dt_ir = dt_utc + IRAN_OFFSET
-            return f"{dt_ir.day} {MONTHS_FA[dt_ir.month]}، ساعت {dt_ir.strftime('%H:%M')} (ایران)"
+            return f"{dt_utc.day} {MONTHS_FA[dt_utc.month]}، ساعت {dt_utc.strftime('%H:%M')} (UTC)"
         return dt_utc.strftime("%b %d, %H:%M UTC")
     except Exception:
         return str(dt_utc)

@@ -10,7 +10,8 @@ from telegram.ext import (
 from config import BOT_TOKEN, ADMIN_IDS
 from maintenance import is_maintenance
 
-from database import init_db, bulk_insert_group_matches, bulk_insert_knockout_matches, close_pool, lock_due_matches
+from database import (init_db, bulk_insert_group_matches, bulk_insert_knockout_matches,
+                      sync_match_schedules, close_pool, lock_due_matches)
 from wc_data import GROUP_MATCHES, KNOCKOUT_MATCHES
 from notifier import send_reminders, check_and_announce_results, sync_api_ids
 from handlers.user import (
@@ -194,6 +195,13 @@ async def post_init(app):
     await init_db()
     await bulk_insert_group_matches(GROUP_MATCHES)
     await bulk_insert_knockout_matches(KNOCKOUT_MATCHES)
+    # هر بار استارت‌آپ: تاریخ/ساعت/شهر بازی‌های موجود رو از روی wc_data.py
+    # هم‌گام کن. غیرتخریبی — پیش‌بینی‌ها و کاربرها دست نمیخورن.
+    try:
+        n = await sync_match_schedules(GROUP_MATCHES, KNOCKOUT_MATCHES)
+        log.info("🕒 Schedule sync: %d match row(s) updated", n)
+    except Exception as e:
+        log.error("Schedule sync failed: %s", e)
     log.info("✅ DB ready — %d group + %d knockout matches",
              len(GROUP_MATCHES), len(KNOCKOUT_MATCHES))
     # task ها رو نگه می‌داریم تا garbage collect نشن
