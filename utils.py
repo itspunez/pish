@@ -11,7 +11,6 @@ MONTHS_FA_JALALI = [
     "", "فروردین", "اردیبهشت", "خرداد", "تیر", "مرداد", "شهریور",
     "مهر", "آبان", "آذر", "دی", "بهمن", "اسفند"
 ]
-
 WEEKDAYS_FA = ["دوشنبه","سه‌شنبه","چهارشنبه","پنج‌شنبه","جمعه","شنبه","یکشنبه"]
 
 def flag(team: str) -> str:
@@ -21,10 +20,14 @@ def tname(team: str, lang: str) -> str:
     return TEAM_FA.get(team, team) if lang == "fa" else team
 
 def fmt_time(dt_utc: datetime, lang: str) -> str:
-    """تبدیل UTC به ساعت ایران (IRST=UTC+3:30) با تاریخ شمسی."""
+    """تبدیل UTC به ساعت ایران (IRST=UTC+3:30) با تاریخ شمسی.
+    هم string هم datetime (naive/aware) رو قبول می‌کنه."""
     try:
         if isinstance(dt_utc, str):
-            dt_utc = datetime.fromisoformat(dt_utc.replace("Z","").split("+")[0])
+            dt_utc = datetime.fromisoformat(dt_utc.replace("Z", "").split("+")[0])
+        # اگه timezone-aware بود (مثل آنچه asyncpg برمیگردونه)، naive‌اش کن
+        if getattr(dt_utc, "tzinfo", None) is not None:
+            dt_utc = dt_utc.replace(tzinfo=None)
         iran_dt = dt_utc + IRAN_OFFSET
         if lang == "fa":
             jd = jdatetime.datetime.fromgregorian(datetime=iran_dt)
@@ -42,7 +45,7 @@ def make_display_name(user) -> str:
     return (user.full_name or user.first_name or "User").strip()
 
 def parse_score(text: str):
-    text = text.strip().replace("–","-").replace(" ","-")
+    text = text.strip().replace("–", "-").replace(" ", "-")
     m = re.match(r"^(\d{1,2})-(\d{1,2})$", text)
     if not m: return None
     a, b = int(m.group(1)), int(m.group(2))
@@ -58,8 +61,8 @@ def calc_points(pred1, pred2, result1, result2) -> int:
         return POINTS["exact"]
     if (pred1 - pred2) == (result1 - result2):
         return POINTS["diff"]
-    def winner(a,b): return 1 if a>b else (2 if a<b else 0)
-    if winner(pred1,pred2) == winner(result1,result2):
+    def winner(a, b): return 1 if a > b else (2 if a < b else 0)
+    if winner(pred1, pred2) == winner(result1, result2):
         return POINTS["winner"]
     return POINTS["wrong"]
 
