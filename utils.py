@@ -1,11 +1,18 @@
 import re
 from datetime import datetime, timedelta, timezone
+import jdatetime
 from wc_data import TEAM_FLAG, TEAM_FA
 from config import POINTS
 
-MONTHS_FA = ["","ژانویه","فوریه","مارس","آوریل","مه","ژوئن",
-             "ژوئیه","اوت","سپتامبر","اکتبر","نوامبر","دسامبر"]
+# ایران UTC+3:30 (بدون DST)
 IRAN_OFFSET = timedelta(hours=3, minutes=30)
+
+MONTHS_FA_JALALI = [
+    "", "فروردین", "اردیبهشت", "خرداد", "تیر", "مرداد", "شهریور",
+    "مهر", "آبان", "آذر", "دی", "بهمن", "اسفند"
+]
+
+WEEKDAYS_FA = ["دوشنبه","سه‌شنبه","چهارشنبه","پنج‌شنبه","جمعه","شنبه","یکشنبه"]
 
 def flag(team: str) -> str:
     return TEAM_FLAG.get(team, "🏳️")
@@ -14,15 +21,16 @@ def tname(team: str, lang: str) -> str:
     return TEAM_FA.get(team, team) if lang == "fa" else team
 
 def fmt_time(dt_utc: datetime, lang: str) -> str:
-    """datetime object یا string رو به ساعت نمایشی (UTC) تبدیل می‌کنه.
-    همه ساعت‌ها به وقت جهانی UTC نمایش داده میشن."""
+    """تبدیل UTC به ساعت ایران (IRST=UTC+3:30) با تاریخ شمسی."""
     try:
         if isinstance(dt_utc, str):
             dt_utc = datetime.fromisoformat(dt_utc.replace("Z","").split("+")[0])
-        # همه‌ی نمایش‌ها به وقت UTC (ساعت جهانی)
+        iran_dt = dt_utc + IRAN_OFFSET
         if lang == "fa":
-            return f"{dt_utc.day} {MONTHS_FA[dt_utc.month]}، ساعت {dt_utc.strftime('%H:%M')} (UTC)"
-        return dt_utc.strftime("%b %d, %H:%M UTC")
+            jd = jdatetime.datetime.fromgregorian(datetime=iran_dt)
+            day_name = WEEKDAYS_FA[iran_dt.weekday()]
+            return f"{day_name} {jd.day} {MONTHS_FA_JALALI[jd.month]}، ساعت {iran_dt.strftime('%H:%M')} (به وقت ایران)"
+        return iran_dt.strftime("%b %d, %H:%M Iran Time")
     except Exception:
         return str(dt_utc)
 

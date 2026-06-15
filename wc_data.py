@@ -65,7 +65,7 @@ GROUP_MATCHES = [
     ("C",3,"Scotland","Brazil","2026-06-24 22:00","Miami"),
     ("C",3,"Morocco","Haiti","2026-06-24 22:00","Atlanta"),
     ("D",1,"United States","Paraguay","2026-06-13 01:00","Los Angeles"),
-    ("D",1,"Australia","Turkiye","2026-06-14 16:00","Vancouver"),
+    ("D",1,"Australia","Turkiye","2026-06-14 04:00","Vancouver"),
     ("D",2,"United States","Australia","2026-06-19 19:00","Seattle"),
     ("D",2,"Turkiye","Paraguay","2026-06-20 03:00","San Francisco"),
     ("D",3,"Turkiye","United States","2026-06-26 02:00","Los Angeles"),
