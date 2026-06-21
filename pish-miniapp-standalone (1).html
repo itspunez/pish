@@ -1,0 +1,501 @@
+<!DOCTYPE html>
+<html lang="fa" dir="rtl">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1"/>
+<title>پیش — پیش‌بینی فوتبال</title>
+<style>
+@import url('https://fonts.googleapis.com/css2?family=Vazirmatn:wght@300;400;500;600;700&display=swap');
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+:root{
+  --g:#00C853;--gd:#00C85318;--gg:#00C85330;
+  --gold:#FFB300;--gdd:#FFB30018;
+  --red:#FF4444;--rd:#FF444418;
+  --bg:#0A0F1E;--s1:#111827;--s2:#1A2235;--s3:#202B40;
+  --b1:#ffffff10;--b2:#ffffff1a;
+  --t1:#F0F4FF;--t2:#8B98B8;--t3:#4A5568;
+  --r:16px;--rs:10px;--rx:6px;
+  --f:'Vazirmatn',system-ui,sans-serif;
+}
+html,body{height:100%;background:var(--bg);color:var(--t1);font-family:var(--f);-webkit-font-smoothing:antialiased}
+#app{min-height:100vh;display:flex;flex-direction:column;max-width:430px;margin:0 auto;position:relative}
+
+/* header */
+.hd{padding:14px 18px 12px;display:flex;align-items:center;justify-content:space-between;background:var(--bg);position:sticky;top:0;z-index:50;border-bottom:1px solid var(--b1)}
+.logo{font-size:20px;font-weight:700;color:var(--t1)}.logo b{color:var(--g)}
+.av{width:36px;height:36px;border-radius:50%;background:linear-gradient(135deg,var(--g),#00897B);display:flex;align-items:center;justify-content:center;font-size:15px;font-weight:700;color:#fff}
+
+/* nav */
+.nav{display:flex;background:var(--s1);border-top:1px solid var(--b1);position:fixed;bottom:0;left:50%;transform:translateX(-50%);width:100%;max-width:430px;z-index:100}
+.nb{flex:1;display:flex;flex-direction:column;align-items:center;gap:3px;padding:10px 0 14px;background:none;border:none;cursor:pointer;color:var(--t3);transition:color .15s;font-family:var(--f)}
+.nb.on{color:var(--g)}
+.nb svg{width:22px;height:22px}
+.nl{font-size:10px;font-weight:500}
+
+/* page */
+.pg{padding:0 15px 88px;overflow-y:auto;flex:1}
+
+/* card */
+.cd{background:var(--s1);border:1px solid var(--b1);border-radius:var(--r);padding:15px;margin-bottom:10px;transition:all .15s}
+.cd:hover{border-color:var(--b2)}
+.cd.cl{cursor:pointer}.cd.cl:hover{border-color:var(--g);transform:translateY(-1px)}
+
+/* hero */
+.hero{background:linear-gradient(135deg,var(--s1),var(--s2));border:1px solid var(--b1);border-radius:var(--r);padding:18px;margin:14px 0 6px;position:relative;overflow:hidden}
+.hero::after{content:'';position:absolute;top:-50px;right:-50px;width:130px;height:130px;border-radius:50%;background:var(--gg);filter:blur(35px);pointer-events:none}
+.hg{display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;margin-top:14px}
+.hs{text-align:center}.hv{font-size:21px;font-weight:700}.hl{font-size:11px;color:var(--t3);margin-top:2px}
+
+/* match */
+.mt{display:flex;align-items:center;justify-content:space-between;gap:6px}
+.tm{flex:1;text-align:center}
+.tn{font-size:13px;font-weight:600;line-height:1.3}
+.tc{font-size:11px;color:var(--t3);margin-top:1px}
+.sb{display:flex;align-items:center;gap:6px;background:var(--s2);border-radius:var(--rs);padding:9px 12px;min-width:76px;justify-content:center}
+.sc{font-size:21px;font-weight:700}
+.sd{font-size:16px;color:var(--t3)}
+
+/* badge */
+.bg{display:inline-flex;align-items:center;gap:4px;font-size:10px;font-weight:600;border-radius:20px;padding:2px 8px;letter-spacing:.3px}
+.bl{background:var(--rd);color:var(--red)}.bl::before{content:'';width:5px;height:5px;border-radius:50%;background:var(--red);display:inline-block;animation:pp 1.2s infinite}
+.bd{background:var(--b1);color:var(--t3)}
+.bs{background:var(--gd);color:var(--g)}
+
+/* pred */
+.pr{margin-top:10px;padding-top:10px;border-top:1px solid var(--b1);display:flex;align-items:center;justify-content:space-between}
+.pp{font-size:12px;font-weight:700;border-radius:20px;padding:2px 10px}
+.pp3{background:var(--gdd);color:var(--gold)}.pp1{background:var(--gd);color:var(--g)}.pp0{background:var(--rd);color:var(--red)}
+
+/* standings */
+.sr{display:flex;align-items:center;gap:10px;padding:11px 14px;border-radius:var(--rx);transition:background .1s}
+.sr:hover{background:var(--s2)}.sr.me{background:var(--gd);border:1px solid #00C85325;border-radius:var(--rs)}
+.rk{width:28px;height:28px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:700;flex-shrink:0}
+.r1{background:var(--gdd);color:var(--gold)}.r2{background:#C0C0C015;color:#bbb}.r3{background:#CD7F3215;color:#b87333}.rn{background:var(--s3);color:var(--t3);font-size:11px}
+
+/* input */
+.si{width:62px;height:62px;border-radius:var(--rs);background:var(--s2);border:2px solid var(--b2);color:var(--t1);font-size:26px;font-weight:700;text-align:center;font-family:var(--f);outline:none;transition:border-color .15s;-webkit-appearance:none;-moz-appearance:textfield}
+.si:focus{border-color:var(--g)}
+.si::-webkit-inner-spin-button,.si::-webkit-outer-spin-button{-webkit-appearance:none}
+
+/* btn */
+.btn{display:flex;align-items:center;justify-content:center;gap:6px;border:none;border-radius:var(--rs);padding:13px;font-size:14px;font-weight:600;font-family:var(--f);cursor:pointer;transition:all .15s;width:100%}
+.btn-p{background:var(--g);color:#0A0F1E}.btn-p:hover:not(:disabled){filter:brightness(1.08)}
+.btn-g{background:var(--s2);color:var(--t2);border:1px solid var(--b2)}
+.btn:disabled{opacity:.4;cursor:not-allowed}
+
+/* tabs */
+.tabs{display:flex;background:var(--s2);border-radius:var(--rs);padding:3px;margin-bottom:14px}
+.tab{flex:1;padding:8px;text-align:center;font-size:13px;font-weight:500;border-radius:var(--rx);color:var(--t3);cursor:pointer;transition:all .15s;border:none;background:none;font-family:var(--f)}
+.tab.on{background:var(--s1);color:var(--t1)}
+
+/* sheet */
+.ov{position:fixed;inset:0;background:#0009;z-index:200;display:flex;align-items:flex-end;justify-content:center}
+.sh{background:var(--s1);border-radius:22px 22px 0 0;padding:18px 18px 30px;width:100%;max-width:430px;max-height:88vh;overflow-y:auto;animation:su .22s ease}
+@keyframes su{from{transform:translateY(100%)}to{transform:translateY(0)}}
+.sh-h{width:36px;height:3px;background:var(--b2);border-radius:2px;margin:0 auto 18px}
+.sh-t{font-size:17px;font-weight:700;color:var(--t1);margin-bottom:14px}
+
+/* progress */
+.pb{height:4px;background:var(--s3);border-radius:2px;overflow:hidden}
+.pf{height:100%;background:var(--g);border-radius:2px;transition:width .5s ease}
+
+/* toast */
+.toast{position:fixed;bottom:88px;left:50%;transform:translateX(-50%);background:var(--s1);border:1px solid #00C85340;color:var(--t1);padding:9px 20px;border-radius:30px;font-size:13px;font-weight:500;z-index:300;white-space:nowrap;animation:ti .25s ease}
+@keyframes ti{from{opacity:0;transform:translateX(-50%) translateY(8px)}to{opacity:1;transform:translateX(-50%) translateY(0)}}
+@keyframes pp{0%,100%{opacity:1}50%{opacity:.25}}
+
+/* quick */
+.qk{background:var(--s2);border:none;border-radius:8px;padding:8px 11px;font-size:13px;font-weight:600;cursor:pointer;font-family:var(--f);transition:all .12s;color:var(--t2)}
+.qk.on{background:var(--g);color:#0A0F1E}
+
+.sec{font-size:12px;font-weight:600;color:var(--t3);text-transform:uppercase;letter-spacing:1px;margin:18px 0 8px}
+.empty{text-align:center;padding:44px 0;color:var(--t3);font-size:14px}
+
+/* league chip */
+.lc{background:var(--s1);border:1px solid var(--b1);border-radius:11px;padding:10px 13px;flex-shrink:0;min-width:115px}
+</style>
+</head>
+<body>
+<div id="app">
+  <div class="hd">
+    <div class="logo">پیـ<b>ش</b></div>
+    <div style="display:flex;align-items:center;gap:10px">
+      <div style="text-align:left">
+        <div style="font-size:13px;font-weight:600">علی رضایی</div>
+        <div style="font-size:11px;color:var(--t3)">۲۴۷ امتیاز • رتبه ۳</div>
+      </div>
+      <div class="av">ع</div>
+    </div>
+  </div>
+  <div id="pg" class="pg"></div>
+  <nav class="nav" id="nav"></nav>
+</div>
+
+<script>
+// ── Data ──────────────────────────────────────
+const ME={name:'علی رضایی',av:'ع',pts:247,rank:3,acc:68}
+const LEAGUES=[
+  {id:1,name:'لیگ دوستان',code:'ABCD1234',on:true,mem:8,mr:2,mp:31},
+  {id:2,name:'جنگ ستارگان ⚡',code:'XYZ9999',on:true,mem:5,mr:1,mp:44},
+  {id:3,name:'لیگ آفیس',code:'OFF2025',on:false,mem:12,mr:5,mp:19},
+]
+const STD={
+  1:[{p:1,n:'محمد احمدی',s:38,e:4,c:8},{p:2,n:'علی رضایی',s:31,e:3,c:6},{p:3,n:'سارا کریمی',s:28,e:2,c:7},{p:4,n:'رضا نوری',s:21,e:1,c:5},{p:5,n:'فاطمه موسوی',s:18,e:2,c:4},{p:6,n:'امیر جعفری',s:15,e:1,c:3},{p:7,n:'نرگس صادقی',s:11,e:0,c:3},{p:8,n:'حسین قاسمی',s:7,e:1,c:1}],
+  2:[{p:1,n:'علی رضایی',s:44,e:5,c:9},{p:2,n:'دینا پارسا',s:39,e:4,c:8},{p:3,n:'کامران ملکی',s:33,e:3,c:7},{p:4,n:'شیرین نظری',s:27,e:2,c:6},{p:5,n:'بهنام تهرانی',s:19,e:1,c:4}],
+}
+let MATCHES=[
+  {id:'M1',h:'رئال مادرید',a:'بارسلونا',hc:'RMA',ac:'BAR',lg:'La Liga',ko:Date.now()+5400000,st:'SCHEDULED',hs:null,as:null,pred:null,pts:null},
+  {id:'M2',h:'منچستر سیتی',a:'آرسنال',hc:'MCI',ac:'ARS',lg:'Premier League',ko:Date.now()+10800000,st:'SCHEDULED',hs:null,as:null,pred:{h:2,a:1},pts:null},
+  {id:'M3',h:'بایرن مونیخ',a:'دورتموند',hc:'BAY',ac:'BVB',lg:'Bundesliga',ko:Date.now()-3600000,st:'LIVE',hs:2,as:1,pred:{h:2,a:0},pts:null,min:67},
+  {id:'M4',h:'PSG',a:'مارسی',hc:'PSG',ac:'MAR',lg:'Ligue 1',ko:Date.now()-86400000,st:'FINISHED',hs:3,as:1,pred:{h:2,a:1},pts:1},
+  {id:'M5',h:'اینتر میلان',a:'یوونتوس',hc:'INT',ac:'JUV',lg:'Serie A',ko:Date.now()-172800000,st:'FINISHED',hs:1,as:1,pred:{h:1,a:1},pts:3},
+]
+
+// ── State ──────────────────────────────────────
+let PAGE='home', SHEET=null, TOAST_T=null
+
+// ── Helpers ────────────────────────────────────
+const esc=s=>String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
+function fT(ms){const d=new Date(ms);return d.toLocaleTimeString('fa-IR',{hour:'2-digit',minute:'2-digit'})}
+function fD(ms){const d=new Date(ms);return d.toLocaleDateString('fa-IR',{month:'short',day:'numeric'})}
+function tTo(ms){const d=ms-Date.now();if(d<0)return'';if(d<3600000)return Math.floor(d/60000)+' دقیقه دیگر';if(d<86400000)return'امروز '+fT(ms);return fD(ms)}
+
+function showToast(msg){
+  document.querySelectorAll('.toast').forEach(e=>e.remove())
+  const el=document.createElement('div')
+  el.className='toast';el.textContent=msg
+  document.body.appendChild(el)
+  if(TOAST_T)clearTimeout(TOAST_T)
+  TOAST_T=setTimeout(()=>el.remove(),2300)
+}
+
+// ── Render ──────────────────────────────────────
+function render(){
+  renderNav()
+  renderPage()
+}
+
+function renderNav(){
+  const items=[
+    {id:'home',label:'خانه',svg:'<path d="M3 9l9-7 9 7v11a2 2 0 01-2 2H5a2 2 0 01-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/>'},
+    {id:'matches',label:'بازی‌ها',svg:'<circle cx="12" cy="12" r="10"/><polygon points="10 8 16 12 10 16 10 8"/>'},
+    {id:'leagues',label:'لیگ‌ها',svg:'<polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/>'},
+    {id:'profile',label:'پروفایل',svg:'<path d="M20 21v-2a4 4 0 00-4-4H8a4 4 0 00-4 4v2"/><circle cx="12" cy="7" r="4"/>'},
+  ]
+  document.getElementById('nav').innerHTML=items.map(i=>`
+    <button class="nb ${PAGE===i.id?'on':''}" onclick="setPage('${i.id}')">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">${i.svg}</svg>
+      <span class="nl">${i.label}</span>
+    </button>`).join('')
+}
+
+function renderPage(){
+  const el=document.getElementById('pg')
+  if(PAGE==='home') el.innerHTML=homeHTML()
+  else if(PAGE==='matches') el.innerHTML=matchesHTML()
+  else if(PAGE==='leagues') el.innerHTML=leaguesHTML()
+  else if(PAGE==='profile') el.innerHTML=profileHTML()
+  if(SHEET) renderSheet()
+}
+
+// ── Match Card HTML ──────────────────────────────
+function matchCardHTML(m, clickable){
+  const live=m.st==='LIVE', done=m.st==='FINISHED', sched=m.st==='SCHEDULED'
+  const badge=live?`<span class="bg bl">زنده • ${m.min||''}'</span>`:done?`<span class="bg bd">پایان</span>`:`<span class="bg bs">${tTo(m.ko)||fT(m.ko)}</span>`
+  const score=live||done?`<span class="sc" style="${live?'color:var(--red)':''}">${m.hs}</span><span class="sd">—</span><span class="sc" style="${live?'color:var(--red)':''}">${m.as}</span>`:`<span style="font-size:12px;color:var(--t3)">VS</span>`
+  const pred=m.pred?`<div class="pr">
+    <span style="font-size:11px;color:var(--t3)">پیش‌بینی</span>
+    <span style="font-size:13px;font-weight:600;color:var(--t2)">${m.pred.h} — ${m.pred.a}</span>
+    ${done?`<span class="pp pp${m.pts??0}">${m.pts===3?'🎯 ۳pt':m.pts===1?'✅ ۱pt':'❌ ۰pt'}</span>`:sched?`<span style="font-size:11px;color:var(--t3)">ویرایش ✏️</span>`:`<span style="font-size:11px;color:var(--red)">در جریان</span>`}
+  </div>`:sched&&clickable?`<div style="text-align:center;margin-top:8px;font-size:11px;color:var(--g);font-weight:600">ضربه بزن و پیش‌بینی کن ↑</div>`:''
+  return `<div class="cd cl" ${clickable&&sched?`onclick="openPredict('${m.id}')"`:''} style="margin-bottom:10px">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:11px">
+      <span style="font-size:10px;color:var(--t3);text-transform:uppercase;letter-spacing:1px">${esc(m.lg)}</span>
+      ${badge}
+    </div>
+    <div class="mt">
+      <div class="tm"><div class="tn">${esc(m.h)}</div><div class="tc">${m.hc}</div></div>
+      <div class="sb">${score}</div>
+      <div class="tm"><div class="tn">${esc(m.a)}</div><div class="tc">${m.ac}</div></div>
+    </div>
+    ${pred}
+  </div>`
+}
+
+// ── Home ───────────────────────────────────────
+function homeHTML(){
+  const scored=MATCHES.filter(m=>m.st==='FINISHED')
+  const tp=scored.reduce((s,m)=>s+(m.pts||0),0)
+  const pred=MATCHES.filter(m=>m.pred).length
+  const upcoming=MATCHES.filter(m=>m.st!=='FINISHED')
+  const finished=MATCHES.filter(m=>m.st==='FINISHED')
+  return `
+  <div class="hero">
+    <div style="display:flex;justify-content:space-between;align-items:flex-start">
+      <div><div style="font-size:18px;font-weight:700">سلام، ${ME.name} 👋</div><div style="font-size:12px;color:var(--t3);margin-top:2px">امروز چند تا پیش‌بینی داری؟</div></div>
+      <div style="background:var(--gd);border:1px solid var(--gg);border-radius:11px;padding:6px 13px;text-align:center"><div style="font-size:19px;font-weight:700;color:var(--g)">#${ME.rank}</div><div style="font-size:10px;color:var(--t3)">رتبه</div></div>
+    </div>
+    <div class="hg">
+      <div class="hs"><div class="hv" style="color:var(--gold)">${ME.pts}</div><div class="hl">امتیاز کل</div></div>
+      <div class="hs"><div class="hv" style="color:var(--g)">${ME.acc}%</div><div class="hl">دقت</div></div>
+      <div class="hs"><div class="hv" style="color:var(--t2)">${pred}</div><div class="hl">پیش‌بینی</div></div>
+    </div>
+    <div style="margin-top:13px">
+      <div style="display:flex;justify-content:space-between;margin-bottom:5px"><span style="font-size:11px;color:var(--t3)">پیشرفت این هفته</span><span style="font-size:11px;color:var(--g)">${tp} / ۱۵ امتیاز</span></div>
+      <div class="pb"><div class="pf" style="width:${Math.min(tp/15*100,100)}%"></div></div>
+    </div>
+  </div>
+  <div class="sec">لیگ‌های فعال</div>
+  <div style="display:flex;gap:8px;overflow-x:auto;padding-bottom:4px;margin-bottom:4px">
+    ${LEAGUES.filter(l=>l.on).map(l=>`<div class="lc"><div style="font-size:13px;font-weight:600;margin-bottom:4px">${esc(l.name)}</div><div style="font-size:12px;color:var(--g);font-weight:700">${l.mp} امتیاز</div><div style="font-size:11px;color:var(--t3)">رتبه ${l.mr} از ${l.mem}</div></div>`).join('')}
+  </div>
+  <div class="sec">بازی‌های پیش رو</div>
+  ${upcoming.map(m=>matchCardHTML(m,true)).join('')}
+  ${finished.length?`<div class="sec">نتایج اخیر</div>${finished.map(m=>matchCardHTML(m,false)).join('')}`:''}
+  `
+}
+
+// ── Matches ────────────────────────────────────
+let matchTab='upcoming'
+function matchesHTML(){
+  const upcoming=MATCHES.filter(m=>m.st!=='FINISHED')
+  const finished=MATCHES.filter(m=>m.st==='FINISHED')
+  const shown=matchTab==='upcoming'?upcoming:finished
+  const hasLive=MATCHES.some(m=>m.st==='LIVE')
+  return `
+  <div style="margin-top:14px">
+    <div class="tabs">
+      <button class="tab ${matchTab==='upcoming'?'on':''}" onclick="setMatchTab('upcoming')">پیش رو ${hasLive?'<span style="color:var(--red);font-weight:700"> • زنده</span>':''}</button>
+      <button class="tab ${matchTab==='finished'?'on':''}" onclick="setMatchTab('finished')">نتایج (${finished.length})</button>
+    </div>
+    ${shown.length===0?`<div class="empty">بازی‌ای نیست ⚽</div>`:shown.map(m=>matchCardHTML(m,true)).join('')}
+  </div>`
+}
+
+// ── Leagues ────────────────────────────────────
+function leaguesHTML(){
+  const active=LEAGUES.filter(l=>l.on)
+  const old=LEAGUES.filter(l=>!l.on)
+  return `
+  <div style="display:flex;gap:8px;margin-top:14px;margin-bottom:4px">
+    <button class="btn btn-p" onclick="openJoin()">+ پیوستن به لیگ</button>
+    <button class="btn btn-g" onclick="showToast('ساخت لیگ از ربات: /newleague')">ساخت لیگ</button>
+  </div>
+  <div class="sec">لیگ‌های فعال</div>
+  ${active.map(l=>`<div class="cd cl" onclick="openLeague(${l.id})" style="margin-bottom:10px">
+    <div style="font-size:16px;font-weight:700;margin-bottom:8px">${esc(l.name)}</div>
+    <div style="display:flex;justify-content:space-between;align-items:center">
+      <div style="display:flex;gap:8px;align-items:center"><span class="bg bs">فعال</span><span style="font-size:12px;color:var(--t3)">👥 ${l.mem} نفر</span></div>
+      <div style="text-align:left"><div style="font-size:19px;font-weight:700;color:var(--gold)">${l.mp}pt</div><div style="font-size:11px;color:var(--t3)">رتبه ${l.mr}</div></div>
+    </div>
+  </div>`).join('')}
+  ${old.length?`<div class="sec">پایان‌یافته</div>${old.map(l=>`<div class="cd cl" onclick="openLeague(${l.id})" style="margin-bottom:10px;opacity:.65">
+    <div style="font-size:16px;font-weight:700;margin-bottom:8px">${esc(l.name)}</div>
+    <div style="display:flex;justify-content:space-between;align-items:center"><span class="bg bd">پایان</span><div style="font-size:14px;font-weight:600;color:var(--t3)">${l.mp}pt — رتبه ${l.mr}</div></div>
+  </div>`).join('')}`:''}
+  `
+}
+
+// ── Profile ────────────────────────────────────
+function profileHTML(){
+  const sc=MATCHES.filter(m=>m.st==='FINISHED'&&m.pred)
+  const ex=sc.filter(m=>m.pts===3).length
+  const co=sc.filter(m=>m.pts>=1).length
+  const wr=sc.filter(m=>m.pts===0).length
+  const tp=sc.reduce((s,m)=>s+(m.pts||0),0)
+  const hist=[{w:'H1',p:7},{w:'H2',p:9},{w:'H3',p:5},{w:'H4',p:11},{w:'H5',p:tp}]
+  const mx=Math.max(...hist.map(h=>h.p),1)
+  return `
+  <div class="hero" style="margin-top:14px">
+    <div style="display:flex;align-items:center;gap:13px">
+      <div style="width:52px;height:52px;border-radius:50%;background:linear-gradient(135deg,var(--g),#00897B);display:flex;align-items:center;justify-content:center;font-size:20px;font-weight:700;color:#fff">${ME.av}</div>
+      <div><div style="font-size:17px;font-weight:700">${ME.name}</div><div style="font-size:12px;color:var(--t3);margin-top:3px">🏆 رتبه #${ME.rank}</div></div>
+    </div>
+    <div class="hg" style="margin-top:18px">
+      <div class="hs"><div class="hv" style="color:var(--gold)">${ME.pts}</div><div class="hl">امتیاز کل</div></div>
+      <div class="hs"><div class="hv" style="color:var(--g)">${ME.acc}%</div><div class="hl">دقت</div></div>
+      <div class="hs"><div class="hv" style="color:var(--t2)">#${ME.rank}</div><div class="hl">رتبه</div></div>
+    </div>
+  </div>
+  <div class="sec">این هفته</div>
+  <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:4px">
+    ${[['🎯',ex,'نتیجه دقیق','var(--gold)'],['✅',co,'برنده درست','var(--g)'],['❌',wr,'اشتباه','var(--red)'],['⚡',tp,'امتیاز هفته','var(--g)']].map(([ic,v,l,c])=>`
+    <div class="cd" style="text-align:center">
+      <div style="font-size:26px">${ic}</div>
+      <div style="font-size:21px;font-weight:700;color:${c};margin-top:3px">${v}</div>
+      <div style="font-size:11px;color:var(--t3)">${l}</div>
+    </div>`).join('')}
+  </div>
+  <div class="sec">روند امتیازات</div>
+  <div class="cd" style="margin-bottom:14px">
+    <div style="display:flex;align-items:flex-end;gap:7px;height:96px;padding:4px 0">
+      ${hist.map((h,i)=>{
+        const ht=Math.max(Math.round(h.p/mx*84),8)
+        const last=i===hist.length-1
+        return `<div style="flex:1;display:flex;flex-direction:column;align-items:center;gap:4px">
+          <div style="font-size:11px;font-weight:600;color:${last?'var(--gold)':'var(--t3)'}">${h.p}</div>
+          <div style="width:100%;height:${ht}px;background:${last?'linear-gradient(to top,var(--g),var(--gold))':'var(--s3)'};border-radius:4px 4px 0 0"></div>
+          <div style="font-size:9px;color:var(--t3)">${h.w}</div>
+        </div>`
+      }).join('')}
+    </div>
+  </div>
+  <div class="sec">نتایج اخیر</div>
+  ${sc.map(m=>`<div class="cd" style="margin-bottom:9px">
+    <div style="display:flex;align-items:center;justify-content:space-between">
+      <div><div style="font-size:13px;font-weight:600">${esc(m.h)} ${m.hs}—${m.as} ${esc(m.a)}</div><div style="font-size:11px;color:var(--t3);margin-top:3px">پیش‌بینی: ${m.pred.h}—${m.pred.a}</div></div>
+      <span class="pp pp${m.pts??0}" style="font-size:13px">${m.pts===3?'🎯':m.pts===1?'✅':'❌'} ${m.pts||0}pt</span>
+    </div>
+  </div>`).join('')}
+  `
+}
+
+// ── Sheet System ───────────────────────────────
+function renderSheet(){
+  document.querySelectorAll('.ov').forEach(e=>e.remove())
+  if(!SHEET) return
+  const div=document.createElement('div')
+  div.className='ov'
+  div.onclick=e=>{if(e.target===div){SHEET=null;renderSheet()}}
+  div.innerHTML=`<div class="sh">${SHEET}</div>`
+  document.body.appendChild(div)
+}
+
+function closeSheet(){SHEET=null;renderSheet()}
+
+// ── Predict Sheet ──────────────────────────────
+let pMatch=null
+function openPredict(id){
+  pMatch=MATCHES.find(m=>m.id===id)
+  if(!pMatch) return
+  showPredictSheet()
+}
+
+function showPredictSheet(){
+  const m=pMatch
+  const ph=m.pred?m.pred.h:'',pa=m.pred?m.pred.a:''
+  const actives=LEAGUES.filter(l=>l.on)
+  SHEET=`
+    <div class="sh-h"></div>
+    <div class="sh-t">ثبت پیش‌بینی</div>
+    <div style="background:var(--s2);border-radius:11px;padding:13px;display:flex;align-items:center;justify-content:space-between;margin-bottom:18px">
+      <div style="flex:1;text-align:center"><div style="font-size:14px;font-weight:700">${esc(m.h)}</div><div style="font-size:11px;color:var(--t3);margin-top:1px">${m.hc}</div></div>
+      <div style="text-align:center;padding:0 8px"><div style="font-size:11px;color:var(--g);font-weight:600">${m.lg}</div><div style="font-size:10px;color:var(--t3);margin-top:1px">${fD(m.ko)}</div></div>
+      <div style="flex:1;text-align:center"><div style="font-size:14px;font-weight:700">${esc(m.a)}</div><div style="font-size:11px;color:var(--t3);margin-top:1px">${m.ac}</div></div>
+    </div>
+    <div style="font-size:12px;color:var(--t3);text-align:center;margin-bottom:8px">نتیجه ۹۰ دقیقه را وارد کنید</div>
+    <div style="display:flex;align-items:center;justify-content:center;gap:12px;margin-bottom:14px">
+      <div style="text-align:center"><input type="number" class="si" id="ph" min="0" max="20" value="${ph}" placeholder="0"><div style="font-size:11px;color:var(--t3);margin-top:5px">${m.hc}</div></div>
+      <span style="font-size:22px;color:var(--t3)">—</span>
+      <div style="text-align:center"><input type="number" class="si" id="pa" min="0" max="20" value="${pa}" placeholder="0"><div style="font-size:11px;color:var(--t3);margin-top:5px">${m.ac}</div></div>
+    </div>
+    <div style="font-size:11px;color:var(--t3);text-align:center;margin-bottom:7px">پیشنهاد سریع</div>
+    <div style="display:flex;gap:7px;justify-content:center;flex-wrap:wrap;margin-bottom:18px">
+      ${[[1,0],[1,1],[0,1],[2,1],[2,0],[0,2]].map(([h,a])=>`<button class="qk" onclick="setQuick(${h},${a})">${h}—${a}</button>`).join('')}
+    </div>
+    ${actives.length?`
+    <div style="font-size:12px;color:var(--t3);margin-bottom:7px">لیگ</div>
+    <div style="display:flex;gap:7px;flex-wrap:wrap;margin-bottom:18px" id="lgsel">
+      ${actives.map((l,i)=>`<button class="qk ${i===0?'on':''}" onclick="setLg(this)" data-id="${l.id}">${esc(l.name)}</button>`).join('')}
+    </div>`:''}
+    <div style="background:var(--s2);border-radius:9px;padding:11px 13px;margin-bottom:16px;display:flex;gap:14px;justify-content:center">
+      ${[[3,'نتیجه دقیق','var(--gold)'],[1,'برنده درست','var(--g)'],[0,'اشتباه','var(--t3)']].map(([p,l,c])=>`<div style="text-align:center"><div style="font-size:17px;font-weight:700;color:${c}">${p}</div><div style="font-size:10px;color:var(--t3)">${l}</div></div>`).join('')}
+    </div>
+    <button class="btn btn-p" onclick="savePred()">${m.pred?'✏️ ویرایش پیش‌بینی':'✅ ثبت پیش‌بینی'}</button>
+    <div style="margin-top:8px"><button class="btn btn-g" onclick="closeSheet()">انصراف</button></div>
+  `
+  renderSheet()
+}
+
+function setQuick(h,a){
+  const ph=document.getElementById('ph'),pa=document.getElementById('pa')
+  if(ph) ph.value=h; if(pa) pa.value=a
+  document.querySelectorAll('.qk').forEach(b=>{
+    if(b.textContent===`${h}—${a}`) b.classList.add('on'); else b.classList.remove('on')
+  })
+}
+
+function setLg(btn){document.querySelectorAll('#lgsel .qk').forEach(b=>b.classList.remove('on'));btn.classList.add('on')}
+
+function savePred(){
+  const h=parseInt(document.getElementById('ph')?.value)
+  const a=parseInt(document.getElementById('pa')?.value)
+  if(isNaN(h)||isNaN(a)||h<0||a<0) return
+  MATCHES=MATCHES.map(m=>m.id===pMatch.id?{...m,pred:{h,a}}:m)
+  closeSheet()
+  showToast(`پیش‌بینی ${h}—${a} ثبت شد ✓`)
+  renderPage()
+}
+
+// ── League Sheet ────────────────────────────────
+function openLeague(id){
+  const l=LEAGUES.find(x=>x.id===id)
+  if(!l) return
+  const rows=STD[id]||[]
+  SHEET=`
+    <div class="sh-h"></div>
+    <div style="background:var(--s2);border-radius:11px;padding:15px;margin-bottom:15px">
+      <div style="display:flex;justify-content:space-between;align-items:flex-start">
+        <div><div style="font-size:17px;font-weight:700">${esc(l.name)}</div><div style="font-size:12px;color:var(--t3);margin-top:3px">👥 ${l.mem} عضو</div></div>
+        <div style="text-align:center"><div style="font-size:22px;font-weight:700;color:var(--gold)">${l.mp}</div><div style="font-size:10px;color:var(--t3)">امتیاز من</div></div>
+      </div>
+      <div style="display:flex;gap:8px;margin-top:11px">
+        <div style="flex:1;background:var(--gd);border-radius:8px;padding:8px;text-align:center"><div style="font-size:19px;font-weight:700;color:var(--g)">#${l.mr}</div><div style="font-size:10px;color:var(--t3)">رتبه من</div></div>
+        <div style="flex:1;background:var(--s3);border-radius:8px;padding:8px;text-align:center"><div style="font-size:19px;font-weight:700;color:var(--t2)">${l.mem}</div><div style="font-size:10px;color:var(--t3)">عضو</div></div>
+      </div>
+    </div>
+    <div style="font-size:12px;color:var(--t3);margin-bottom:9px">جدول رده‌بندی</div>
+    ${rows.map(r=>{
+      const isMe=r.n==='علی رضایی'
+      const medal=r.p===1?'🥇':r.p===2?'🥈':r.p===3?'🥉':r.p
+      const rc=r.p===1?'r1':r.p===2?'r2':r.p===3?'r3':'rn'
+      return `<div class="sr ${isMe?'me':''}">
+        <div class="rk ${rc}">${medal}</div>
+        <div style="flex:1"><div style="font-size:13px;font-weight:500">${esc(r.n)}${isMe?`<span style="font-size:10px;color:var(--g)"> • شما</span>`:''}</div><div style="font-size:11px;color:var(--t3);margin-top:1px">🎯 ${r.e} دقیق  ✅ ${r.c} نتیجه</div></div>
+        <div style="font-size:15px;font-weight:700;color:var(--g)">${r.s}</div>
+      </div>`
+    }).join('')}
+    <div style="margin-top:16px;text-align:center">
+      <div style="font-size:12px;color:var(--t3);margin-bottom:9px">کد دعوت</div>
+      <div style="font-size:26px;font-weight:700;color:var(--g);letter-spacing:5px;background:var(--s2);border-radius:11px;padding:16px;border:2px dashed #00C85330;margin-bottom:13px">${l.code}</div>
+      <button class="btn btn-p" onclick="copyCode('${l.code}')">📋 کپی کد</button>
+    </div>
+  `
+  renderSheet()
+}
+
+function copyCode(c){
+  if(navigator.clipboard) navigator.clipboard.writeText(c)
+  showToast('کد کپی شد ✓')
+}
+
+// ── Join Sheet ──────────────────────────────────
+function openJoin(){
+  SHEET=`
+    <div class="sh-h"></div>
+    <div class="sh-t">پیوستن به لیگ</div>
+    <div style="font-size:13px;color:var(--t3);margin-bottom:11px">کد دعوت لیگ را وارد کنید</div>
+    <input id="jc" maxlength="8" placeholder="مثال: ABCD1234" oninput="this.value=this.value.toUpperCase()"
+      style="width:100%;background:var(--s2);border:2px solid var(--b2);border-radius:9px;padding:13px;color:var(--t1);font-size:18px;font-weight:700;font-family:var(--f);text-align:center;letter-spacing:4px;outline:none;margin-bottom:14px"/>
+    <button class="btn btn-p" onclick="doJoin()">پیوستن</button>
+    <div style="margin-top:8px"><button class="btn btn-g" onclick="closeSheet()">انصراف</button></div>
+  `
+  renderSheet()
+}
+
+function doJoin(){
+  const c=document.getElementById('jc')?.value||''
+  if(c.length<4) return
+  closeSheet()
+  showToast(`درخواست با کد ${c} ارسال شد`)
+}
+
+// ── Nav actions ────────────────────────────────
+function setPage(p){PAGE=p;SHEET=null;render()}
+function setMatchTab(t){matchTab=t;renderPage()}
+
+// ── Init ───────────────────────────────────────
+render()
+</script>
+</body>
+</html>
