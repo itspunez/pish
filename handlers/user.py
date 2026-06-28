@@ -5,7 +5,7 @@ from database import (
     upsert_user, get_user, get_group_matches,
     get_all_matches, get_match, get_prediction,
     save_prediction, get_user_stats, leaderboard, get_user_rank,
-    get_boost, set_boost, get_advancement, save_advancement,
+    get_boost, set_boost, get_advancement, save_advancement, delete_advancement,
     get_user_knockout_stats,
 )
 from wc_data import STAGE_LABEL, KNOCKOUT_ORDER
@@ -269,14 +269,20 @@ async def _show_knockout_list(query, lang, matches, lbl, user_id=None):
 
         is_boosted = current_boost and current_boost["match_id"] == m["id"]
         boost_icon = "🚀" if is_boosted else ""
-        adv_icon = f"🏆{flag(adv['team'])}" if adv else ""
+        # تیم صعودکننده: اگه پیش‌بینی غیرمساوی هست از روی همون استخراج میشه
+        auto_adv_team = None
+        if pred and pred["pred1"] != pred["pred2"]:
+            auto_adv_team = m["team1"] if pred["pred1"] > pred["pred2"] else m["team2"]
+        adv_team_display = auto_adv_team or (adv["team"] if adv else None)
+        adv_icon = f"🏆{flag(adv_team_display)}" if adv_team_display else ""
 
         pred_txt = f"{pred['pred1']}-{pred['pred2']}" if pred else ("؟" if lang=="fa" else "?")
         txt += f"{boost_icon}{f1} {t1} vs {t2} {f2}\n"
         txt += f"🗓 {fmt_time(m['match_time'],lang)}\n"
         txt += f"{'پیش‌بینی' if lang=='fa' else 'Pick'}: {pred_txt}"
-        if adv_icon:
-            txt += f"  {adv_icon} {tname(adv['team'],lang)}"
+        if adv_team_display:
+            auto_tag = ("  (خودکار)" if lang=="fa" else "  (auto)") if auto_adv_team else ""
+            txt += f"  {adv_icon} {tname(adv_team_display,lang)}{auto_tag}"
         txt += "\n\n"
 
         kb.append([Btn(
@@ -294,9 +300,12 @@ async def _show_knockout_list(query, lang, matches, lbl, user_id=None):
             boost_lbl = ("🚀 بوست ×۲" if lang=="fa" else "🚀 Boost ×2")
         row2.append(Btn(boost_lbl, callback_data=f"boost_{m['id']}_{stage}"))
 
-        adv_lbl = (f"🏆 {'تغییر صعود' if adv else 'پیش‌بینی صعود'}" if lang=="fa"
-                   else f"🏆 {'Change Adv.' if adv else 'Who Advances?'}")
-        row2.append(Btn(adv_lbl, callback_data=f"adv_{m['id']}"))
+        # دکمه صعود: فقط در صورتی نیاز هست که پیش‌بینی نشده یا مساوی پیش‌بینی شده
+        decisive = pred and pred["pred1"] != pred["pred2"]
+        if not decisive:
+            adv_lbl = (f"🏆 {'تغییر صعود' if adv else 'پیش‌بینی صعود'}" if lang=="fa"
+                       else f"🏆 {'Change Adv.' if adv else 'Who Advances?'}")
+            row2.append(Btn(adv_lbl, callback_data=f"adv_{m['id']}"))
         kb.append(row2)
 
     kb.append([Btn("🔙 برگشت" if lang=="fa" else "🔙 Back", callback_data="show_stages")])
@@ -364,6 +373,16 @@ async def handle_prediction_input(update: Update, ctx: ContextTypes.DEFAULT_TYPE
         return ConversationHandler.END
 
     m = await get_match(match_id)
+    # برای بازی‌های حذفی: تیم صعودکننده رو خودکار از روی نتیجه تنظیم کن
+    from wc_data import KNOCKOUT_STAGES
+    if m and m["stage"] in KNOCKOUT_STAGES:
+        if p1 > p2:
+            await save_advancement(update.effective_user.id, match_id, m["team1"])
+        elif p2 > p1:
+            await save_advancement(update.effective_user.id, match_id, m["team2"])
+        else:
+            # مساوی → پیش‌بینی قبلی صعود حذف بشه تا کاربر دستی انتخاب کنه
+            await delete_advancement(update.effective_user.id, match_id)
     score_txt = fmt_pred(m["team1"], m["team2"], p1, p2, lang)
     next_m = await _get_next_unpredicted(update.effective_user.id, grp, round_no, match_id)
     next_grp = await _get_next_group(grp, round_no)
@@ -582,6 +601,16 @@ async def cb_advancement_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if not m or m["is_locked"]:
         await query.answer(
             "⛔ این بازی قفل شده!" if lang=="fa" else "⛔ Match locked!", show_alert=True)
+        return
+
+    # اگه پیش‌بینی غیرمساوی داره، نیاز به انتخاب دستی صعود نیست
+    pred = await get_prediction(query.from_user.id, match_id)
+    if pred and pred["pred1"] != pred["pred2"]:
+        await query.answer(
+            "✅ تیم صعودکننده از روی پیش‌بینی شما خودکار ثبت شده. برای تغییر، نتیجه رو ویرایش کن."
+            if lang=="fa" else
+            "✅ Advancing team is auto-set from your score. Edit the score to change it.",
+            show_alert=True)
         return
 
     f1, f2 = flag(m["team1"]), flag(m["team2"])

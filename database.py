@@ -790,6 +790,20 @@ async def get_advancement(user_id: int, match_id: int):
             "SELECT * FROM advancement_predictions WHERE user_id=$1 AND match_id=$2",
             user_id, match_id)
 
+async def delete_advancement(user_id: int, match_id: int) -> bool:
+    """حذف پیش‌بینی صعود — فقط اگه بازی قفل نشده باشه."""
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        async with conn.transaction():
+            m = await conn.fetchrow(
+                "SELECT is_locked FROM matches WHERE id=$1 FOR UPDATE", match_id)
+            if not m or m["is_locked"]:
+                return False
+            await conn.execute(
+                "DELETE FROM advancement_predictions WHERE user_id=$1 AND match_id=$2",
+                user_id, match_id)
+            return True
+
 async def score_advancements(match_id: int, winner_team: str) -> list:
     """بعد از مشخص شدن برنده، امتیاز پیش‌بینی صعود رو محاسبه کن (+۵ یا ۰)."""
     pool = await get_pool()
