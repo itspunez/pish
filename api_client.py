@@ -47,9 +47,18 @@ async def _get(url: str, timeout: int = 10):
 
 async def get_match_result(api_match_id: int) -> dict | None:
     """نتیجه یک بازی.
-    home_score / away_score = نتیجه ۹۰ دقیقه (regularTime) — مبنای محاسبه امتیاز
-    fulltime_* = شامل وقت اضافه (فقط برای نمایش)
-    penalty_* = ضربات پنالتی
+
+    منطق امتیازدهی:
+    - بازی گروهی: نتیجه ۹۰ دقیقه (regularTime یا fullTime اگه regularTime نباشه)
+    - بازی حذفی: نتیجه ۹۰ دقیقه برای امتیاز (scoring)؛ اگه تساوی بود،
+      نتیجه بعد از وقت اضافه (extraTime/fullTime) برای تعیین bracket_winner استفاده میشه
+      و در صورت مساوی ماندن، ضربات پنالتی برنده رو مشخص می‌کنه.
+
+    کلیدهای خروجی:
+      home_score / away_score  → نتیجه ۹۰ دقیقه (مبنای محاسبه امتیاز)
+      et_home / et_away        → نتیجه بعد از وقت اضافه (برای تعیین bracket_winner)
+      penalty_home / penalty_away → ضربات پنالتی
+      status                   → وضعیت بازی
     """
     data = await _get(f"{BASE}/matches/{api_match_id}")
     if not data:
@@ -57,19 +66,28 @@ async def get_match_result(api_match_id: int) -> dict | None:
     score = data.get("score", {})
     status = data.get("status", "")
     reg = score.get("regularTime") or {}
-    ft  = score.get("fullTime") or {}
-    pen = score.get("penalties") or {}
+    et  = score.get("extraTime")   or {}
+    ft  = score.get("fullTime")    or {}
+    pen = score.get("penalties")   or {}
 
-    # اولویت با regularTime؛ اگه نبود (بازی گروهی) از fullTime
-    home = reg.get("home") if reg.get("home") is not None else ft.get("home")
-    away = reg.get("away") if reg.get("away") is not None else ft.get("away")
+    # نتیجه ۹۰ دقیقه:
+    #   اگه regularTime پر شده باشه (بازی‌های حذفی) → از regularTime
+    #   وگرنه (بازی‌های گروهی) → از fullTime
+    home_90 = reg.get("home") if reg.get("home") is not None else ft.get("home")
+    away_90 = reg.get("away") if reg.get("away") is not None else ft.get("away")
+
+    # نتیجه بعد از وقت اضافه:
+    #   اگه extraTime وجود داشت → از extraTime
+    #   وگرنه → از fullTime (که ممکنه شامل AET باشه)
+    et_home = et.get("home") if et.get("home") is not None else ft.get("home")
+    et_away = et.get("away") if et.get("away") is not None else ft.get("away")
 
     return {
-        "status": status,
-        "home_score": home,
-        "away_score": away,
-        "fulltime_home": ft.get("home"),
-        "fulltime_away": ft.get("away"),
+        "status":       status,
+        "home_score":   home_90,
+        "away_score":   away_90,
+        "et_home":      et_home,
+        "et_away":      et_away,
         "penalty_home": pen.get("home"),
         "penalty_away": pen.get("away"),
     }

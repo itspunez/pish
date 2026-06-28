@@ -31,7 +31,8 @@ from handlers.admin import (
     cb_admin_lock_start, admin_lock_id,
     cmd_testfull, cmd_cleartestdata,
     cmd_cancel as admin_cancel,
-    ADMIN_RESULT_ID, ADMIN_RESULT_SCORE, ADMIN_RESULT_PENALTY,
+    admin_result_et,
+    ADMIN_RESULT_ID, ADMIN_RESULT_SCORE, ADMIN_RESULT_PENALTY, ADMIN_RESULT_ET,
     ADMIN_MATCH_T1, ADMIN_MATCH_T2, ADMIN_MATCH_STAGE, ADMIN_MATCH_TIME, ADMIN_MATCH_CITY,
     ADMIN_EDIT_ID, ADMIN_EDIT_T1, ADMIN_EDIT_T2,
     ADMIN_LOCK_ID,
@@ -91,6 +92,7 @@ def admin_result_conv():
         states={
             ADMIN_RESULT_ID:      [MessageHandler(filters.TEXT & ~filters.COMMAND, admin_result_id)],
             ADMIN_RESULT_SCORE:   [MessageHandler(filters.TEXT & ~filters.COMMAND, admin_result_score)],
+            ADMIN_RESULT_ET:      [MessageHandler(filters.TEXT & ~filters.COMMAND, admin_result_et)],
             ADMIN_RESULT_PENALTY: [MessageHandler(filters.TEXT & ~filters.COMMAND, admin_result_penalty)],
         },
         fallbacks=[

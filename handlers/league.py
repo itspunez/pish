@@ -8,8 +8,8 @@ from database import (
     league_leaderboard, leave_league, delete_league, get_league_members,
 )
 
-# Conversation states (دور از بقیه نگه می‌داریم)
-LEAGUE_NAME, LEAGUE_CODE = range(50, 52)
+# Conversation states — دور از admin states (20-50) نگه می‌داریم
+LEAGUE_NAME, LEAGUE_CODE = range(200, 202)
 
 # ───────────────── منوی لیگ ─────────────────
 

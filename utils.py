@@ -45,7 +45,9 @@ def make_display_name(user) -> str:
     return (user.full_name or user.first_name or "User").strip()
 
 def parse_score(text: str):
-    text = text.strip().replace("–", "-").replace(" ", "-")
+    # حذف فاصله‌ها قبل از replace — وگرنه "2 - 1" میشه "2---1"
+    text = text.strip().replace("–", "-").replace("–", "-").replace("—", "-")
+    text = re.sub(r"\s*-\s*", "-", text)   # "2 - 1" و "2-1" هر دو → "2-1"
     m = re.match(r"^(\d{1,2})-(\d{1,2})$", text)
     if not m: return None
     a, b = int(m.group(1)), int(m.group(2))

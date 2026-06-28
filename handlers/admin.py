@@ -3,16 +3,18 @@ from telegram.ext import ContextTypes, ConversationHandler
 
 from database import (get_all_matches, get_match, set_result, add_match,
                       update_match_teams, get_all_users, get_pool,
-                      lock_match, unlock_match)
+                      lock_match, unlock_match,
+                      apply_boosts_to_predictions, score_advancements,
+                      mark_result_sent)
 from config import ADMIN_IDS
 from utils import flag, fmt_time, parse_score
 from maintenance import is_maintenance, set_maintenance
-from wc_data import STAGE_LABEL
+from wc_data import STAGE_LABEL, KNOCKOUT_STAGES
 
-ADMIN_RESULT_ID, ADMIN_RESULT_SCORE, ADMIN_RESULT_PENALTY = range(20, 23)
+ADMIN_RESULT_ID, ADMIN_RESULT_SCORE, ADMIN_RESULT_PENALTY, ADMIN_RESULT_ET = range(20, 24)
 ADMIN_MATCH_T1, ADMIN_MATCH_T2, ADMIN_MATCH_STAGE, ADMIN_MATCH_TIME, ADMIN_MATCH_CITY = range(30, 35)
 ADMIN_EDIT_ID, ADMIN_EDIT_T1, ADMIN_EDIT_T2 = range(40, 43)
-ADMIN_LOCK_ID, = range(50, 51)
+ADMIN_LOCK_ID, = range(60, 61)   # ← تغییر کرد از 50 به 60 (تداخل با league state قبلی برطرف شد)
 
 def is_admin(uid): return uid in ADMIN_IDS
 
@@ -78,27 +80,42 @@ async def cb_admin_list(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     await query.edit_message_text(txt, parse_mode="HTML", reply_markup=Markup([
         [Btn("🔙 برگشت", callback_data="adminpanel")]]))
 
-# ── ثبت نتیجه دستی (اضطراری) ─────────────────
+# ── ثبت نتیجه دستی ──────────────────────────
+# فقط بازی‌های حذفی یا بازی‌هایی که API ID ندارن نمایش داده میشن
+# (بازی‌های گروهی با API ID معمولاً خودکار ثبت میشن — اما اگه ادمین خواست، همه نشون داده میشن)
 
 async def cb_admin_result_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
     if not is_admin(query.from_user.id): return ConversationHandler.END
-    # حالا هم بازی‌های تموم‌نشده، هم تموم‌شده (برای اصلاح) قابل انتخاب‌اند
     matches = await get_all_matches()
     if not matches:
         await query.edit_message_text("هنوز بازی‌ای نیست!")
         return ConversationHandler.END
-    txt = "شماره بازی (✏️ اصلاح هم ممکنه):\n\n"
-    for m in matches[:40]:
-        grp = f"[{m['grp']}] " if m["grp"] else ""
-        if m["is_finished"]:
-            status = f"✅ {m['result1']}-{m['result2']}"
-        elif m["is_locked"]:
-            status = "🔒"
-        else:
-            status = "🟢"
-        txt += f"<code>#{m['id']}</code> {grp}{m['team1']} vs {m['team2']} {status}\n"
+
+    # بازی‌ها رو بر اساس مرحله مرتب کن — حذفی‌ها اول
+    knockout_order = ["r32","r16","qf","sf","third","final"]
+    knockout = [m for m in matches if m["stage"] in KNOCKOUT_STAGES]
+    group = [m for m in matches if m["stage"] not in KNOCKOUT_STAGES]
+    sorted_matches = sorted(knockout, key=lambda m: knockout_order.index(m["stage"]) if m["stage"] in knockout_order else 99) + group
+
+    txt = "شماره بازی رو انتخاب کن (✏️ اصلاح نتیجه هم ممکنه):\n\n"
+
+    if knockout:
+        txt += "<b>── 🏆 حذفی ──</b>\n"
+        for m in sorted(knockout, key=lambda m: knockout_order.index(m["stage"]) if m["stage"] in knockout_order else 99):
+            lbl = STAGE_LABEL.get(m["stage"], {}).get("fa", m["stage"])
+            status = f"✅ {m['result1']}-{m['result2']}" if m["is_finished"] else ("🔒" if m["is_locked"] else "🟢")
+            txt += f"<code>#{m['id']}</code> [{lbl}] {flag(m['team1'])}{m['team1']} vs {m['team2']}{flag(m['team2'])} {status}\n"
+        txt += "\n"
+
+    if group:
+        txt += "<b>── 🟢 گروهی ──</b>\n"
+        for m in group[:30]:
+            grp = f"[{m['grp']}] " if m["grp"] else ""
+            status = f"✅ {m['result1']}-{m['result2']}" if m["is_finished"] else ("🔒" if m["is_locked"] else "🟢")
+            txt += f"<code>#{m['id']}</code> {grp}{m['team1']} vs {m['team2']} {status}\n"
+
     await query.edit_message_text(txt + "\n/cancel لغو", parse_mode="HTML")
     return ADMIN_RESULT_ID
 
@@ -113,8 +130,11 @@ async def admin_result_id(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         return ADMIN_RESULT_ID
     ctx.user_data["result_mid"] = mid
     ctx.user_data["result_stage"] = m["stage"]
+    is_knockout = m["stage"] in KNOCKOUT_STAGES
+    stage_lbl = STAGE_LABEL.get(m["stage"], {}).get("fa", m["stage"]) if is_knockout else "گروهی"
     await update.message.reply_text(
-        f"<b>{flag(m['team1'])}{m['team1']} vs {m['team2']}{flag(m['team2'])}</b>\n\n"
+        f"<b>{flag(m['team1'])}{m['team1']} vs {m['team2']}{flag(m['team2'])}</b>\n"
+        f"مرحله: {stage_lbl}\n\n"
         f"نتیجه ۹۰ دقیقه (مثلاً <code>2-1</code>):",
         parse_mode="HTML")
     return ADMIN_RESULT_SCORE
@@ -125,68 +145,121 @@ async def admin_result_score(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("فرمت اشتباه! مثلاً: <code>2-1</code>", parse_mode="HTML")
         return ADMIN_RESULT_SCORE
     ctx.user_data["result_score"] = score
-    stage = ctx.user_data.get("result_stage","group")
+    stage = ctx.user_data.get("result_stage", "group")
     r1, r2 = score
-    # اگه حذفیه و مساوی، پنالتی بخواه
-    if stage != "group" and r1 == r2:
+    # اگه حذفیه و مساوی → ابتدا نتیجه وقت اضافه رو بخواه
+    if stage in KNOCKOUT_STAGES and r1 == r2:
         await update.message.reply_text(
-            "مساوی شد! نتیجه پنالتی:\nمثلاً <code>4-2</code> (تیم اول - تیم دوم)\n"
-            "اگه پنالتی نبود <code>-</code> بزن:", parse_mode="HTML")
-        return ADMIN_RESULT_PENALTY
-    # گروهی یا حذفی با برنده
+            "مساوی ۹۰ دقیقه! نتیجه بعد از وقت اضافه چی شد؟\n"
+            "مثلاً <code>2-1</code> — اگه وقت اضافه‌ای نبود <code>-</code> بزن:",
+            parse_mode="HTML")
+        return ADMIN_RESULT_ET
     return await _finalize_result(update, ctx, None, None)
+
+async def admin_result_et(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """نتیجه وقت اضافه — بعد از مساوی ۹۰ دقیقه"""
+    txt = update.message.text.strip()
+    if txt == "-":
+        # وقت اضافه‌ای نبوده (نباید اتفاق بیفته ولی ادمین میتونه رد کنه)
+        ctx.user_data["result_et"] = (None, None)
+    else:
+        et = parse_score(txt)
+        if not et:
+            await update.message.reply_text("فرمت اشتباه! مثلاً: <code>2-1</code>", parse_mode="HTML")
+            return ADMIN_RESULT_ET
+        ctx.user_data["result_et"] = et
+        et1, et2 = et
+        # اگه وقت اضافه هم مساوی بود → پنالتی بخواه
+        if et1 == et2:
+            await update.message.reply_text(
+                "وقت اضافه هم مساوی! نتیجه ضربات پنالتی:\n"
+                "مثلاً <code>4-2</code> (تیم اول - تیم دوم):",
+                parse_mode="HTML")
+            return ADMIN_RESULT_PENALTY
+
+    et_data = ctx.user_data.get("result_et", (None, None))
+    return await _finalize_result(update, ctx, None, None, et1=et_data[0], et2=et_data[1])
 
 async def admin_result_penalty(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     txt = update.message.text.strip()
     if txt == "-":
-        return await _finalize_result(update, ctx, None, None)
+        et_data = ctx.user_data.get("result_et", (None, None))
+        return await _finalize_result(update, ctx, None, None, et1=et_data[0], et2=et_data[1])
     pen = parse_score(txt)
     if not pen:
         await update.message.reply_text("فرمت اشتباه! مثلاً: <code>4-2</code>", parse_mode="HTML")
         return ADMIN_RESULT_PENALTY
-    return await _finalize_result(update, ctx, pen[0], pen[1])
+    et_data = ctx.user_data.get("result_et", (None, None))
+    return await _finalize_result(update, ctx, pen[0], pen[1], et1=et_data[0], et2=et_data[1])
 
-async def _finalize_result(update, ctx, p1, p2):
+async def _finalize_result(update, ctx, p1, p2, et1=None, et2=None):
+    import logging
+    log = logging.getLogger(__name__)
+
     mid = ctx.user_data["result_mid"]
     r1, r2 = ctx.user_data["result_score"]
+    stage = ctx.user_data.get("result_stage", "group")
+    is_knockout = stage in KNOCKOUT_STAGES
+
     m = await get_match(mid)
     was_finished = bool(m and m["is_finished"])
-    count, winner, changed = await set_result(mid, r1, r2, p1, p2, force=True)
 
+    # ۱. ثبت/بازنویسی نتیجه و محاسبه امتیاز پیش‌بینی‌ها
+    count, winner, changed = await set_result(mid, r1, r2, p1, p2, force=True, et1=et1, et2=et2)
+
+    # ۲. اعمال بوست ×۲ (فقط حذفی)
+    boost_changes = []
+    boost_map = {}
+    if is_knockout:
+        boost_changes = await apply_boosts_to_predictions(mid)
+        boost_map = {b["user_id"]: b for b in boost_changes}
+
+    # ۳. محاسبه امتیاز پیش‌بینی صعود (فقط حذفی)
+    adv_changes = []
+    adv_map = {}
+    if is_knockout and winner:
+        adv_changes = await score_advancements(mid, winner)
+        adv_map = {a["user_id"]: a for a in adv_changes}
+
+    # ۴. پیام تأیید به ادمین
     action = "اصلاح شد" if was_finished else "ثبت شد"
+    m_fresh = await get_match(mid)
     txt = (f"✅ <b>{action}!</b>\n\n"
            f"{flag(m['team1'])}{m['team1']}  <b>{r1}–{r2}</b>  {m['team2']}{flag(m['team2'])}\n")
     if p1 is not None:
         txt += f"ضربات پنالتی: {p1}-{p2}\n"
     if winner:
         txt += f"🏆 صعود کننده: {flag(winner)}{winner}\n"
-    if was_finished:
-        txt += f"\n🔧 <b>{len(changed)}</b> امتیاز تغییر کرد و به کاربرها اطلاع داده شد."
-    else:
-        txt += f"\n🎯 امتیاز <b>{count}</b> پیش‌بینی محاسبه شد!"
+    txt += f"\n🎯 <b>{count}</b> پیش‌بینی محاسبه شد"
+    if boost_changes:
+        txt += f"\n🚀 بوست ×۲ روی <b>{len(boost_changes)}</b> نفر اعمال شد"
+    if adv_changes:
+        txt += f"\n🏆 پیش‌بینی صعود <b>{len(adv_changes)}</b> نفر محاسبه شد"
+    if was_finished and changed:
+        txt += f"\n🔧 <b>{len(changed)}</b> امتیاز تغییر کرد"
 
     await update.message.reply_text(txt, parse_mode="HTML", reply_markup=Markup([
         [Btn("✅ نتیجه دیگه", callback_data="admin_result"),
          Btn("🛠 پنل", callback_data="adminpanel")]]))
 
-    # نوتیف به کاربرها
-    m_fresh = await get_match(mid)
+    # ۵. اعلام به کاربرها
     try:
+        bot = update.get_bot()
         if was_finished:
-            # فقط به کسایی که امتیازشون عوض شد
-            if changed:
-                from notifier import announce_result_correction
-                await announce_result_correction(
-                    update.get_bot(), m_fresh, r1, r2, p1, p2, changed)
-        else:
-            # ثبت اولیه دستی → اعلام عمومی مثل حالت API
-            from notifier import _announce_result
-            from database import mark_result_sent
+            # اصلاح نتیجه — به همه پیام بده (شامل بوست و صعود جدید)
+            from notifier import announce_result_correction
             await mark_result_sent(mid)
-            await _announce_result(update.get_bot(), m_fresh, r1, r2, p1, p2, count, winner)
+            await announce_result_correction(
+                bot, m_fresh, r1, r2, p1, p2, changed,
+                boost_map=boost_map, adv_map=adv_map)
+        else:
+            # ثبت اولیه دستی — اعلام عمومی مثل API
+            from notifier import _announce_result
+            await mark_result_sent(mid)
+            await _announce_result(bot, m_fresh, r1, r2, p1, p2, count, winner,
+                                   boost_map=boost_map, adv_map=adv_map)
     except Exception as e:
-        import logging
-        logging.getLogger(__name__).warning(f"Manual result announce failed: {e}")
+        log.warning(f"Manual result announce failed: {e}")
 
     return ConversationHandler.END
 
@@ -289,7 +362,6 @@ async def admin_edit_t2(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     t1 = ctx.user_data["edit_t1"]
     t2 = update.message.text.strip()
     mid = ctx.user_data["edit_mid"]
-    # هشدار: پیش‌بینی‌های قبلی پاک میشن چون تیم‌ها عوض شدن
     await update_match_teams(mid, t1, t2)
     m = await get_match(mid)
     lbl = STAGE_LABEL.get(m["stage"],{}).get("fa","")
@@ -381,7 +453,6 @@ async def cmd_cleartestdata(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 async def cmd_cancel(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("❌ لغو شد. برای شروع /start بزن.")
     return ConversationHandler.END
-
 
 # ── قفل / باز کردن دستی بازی ─────────────────
 

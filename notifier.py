@@ -85,7 +85,6 @@ async def _handle_group_result(bot: Bot, m):
         log.warning(f"Match {m['id']} ({m['team1']} vs {m['team2']}) has no api_id")
         return
     result = await get_match_result(m["api_id"])
-    # اگه بازی هنوز تموم نشده، این دور رد میکنیم — دور بعدی دوباره چک میشه
     if not result or result["status"] not in ("FINISHED", "FT", "AET", "PEN"):
         return
     if result["home_score"] is None:
@@ -100,26 +99,21 @@ async def _handle_knockout_result(bot: Bot, m):
         log.warning(f"Knockout match {m['id']} ({m['team1']} vs {m['team2']}) has no api_id")
         return
     result = await get_match_result(m["api_id"])
-    # اگه بازی هنوز تموم نشده (در حال بازی یا وقت اضافه)، این دور رد میکنیم
     if not result or result["status"] not in ("FINISHED", "FT", "AET", "PEN"):
         return
-    # نتیجه ۹۰ دقیقه — برای امتیازدهی فقط این مهمه
     r1 = result["home_score"]
     r2 = result["away_score"]
     if r1 is None:
         return
-    # پنالتی رو فقط برای نمایش (اعلام برنده) نگه میداریم، نه امتیازدهی
     p1 = result.get("penalty_home")
     p2 = result.get("penalty_away")
-    # set_result با نتیجه ۹۰ دقیقه — اگه تساوی بود امتیاز تساوی میگیره (درست)
-    count, winner, changed_preds = await set_result(m["id"], r1, r2, p1, p2)
+    count, winner, changed_preds = await set_result(
+        m["id"], r1, r2, p1, p2,
+        et1=result.get("et_home"), et2=result.get("et_away"))
 
-    # اعمال بوست ×۲ روی امتیازهای محاسبه‌شده
     boost_changes = await apply_boosts_to_predictions(m["id"])
-    # ساختن دیکشنری کاربر→ امتیاز boost برای استفاده در announce
     boost_map = {b["user_id"]: b for b in boost_changes}
 
-    # محاسبه امتیاز پیش‌بینی صعود
     adv_changes = []
     if winner:
         adv_changes = await score_advancements(m["id"], winner)
@@ -203,37 +197,83 @@ async def _announce_result(bot: Bot, m, r1, r2, p1, p2, pred_count, winner=None,
 
 # ── اعلام اصلاح نتیجه ─────────────────────────
 
-async def announce_result_correction(bot: Bot, m, r1, r2, p1, p2, changed: list):
-    """بعد از اصلاح نتیجه توسط ادمین، فقط به کسایی که امتیازشون عوض شده پیام بفرست"""
+async def announce_result_correction(bot: Bot, m, r1, r2, p1, p2, changed: list,
+                                     boost_map: dict = None, adv_map: dict = None):
+    """بعد از اصلاح نتیجه توسط ادمین، به همه کاربرها پیام بفرست.
+    - کسایی که امتیازشون عوض شد: تغییر امتیاز رو میبینن
+    - کسایی که بوست داشتن: بوست اعمال‌شده رو میبینن
+    - کسایی که صعود پیش‌بینی کرده بودن: امتیاز صعود رو میبینن
+    """
+    boost_map = boost_map or {}
+    adv_map = adv_map or {}
     f1, f2 = flag(m["team1"]), flag(m["team2"])
-    for ch in changed:
+    is_knockout = m["stage"] in KNOCKOUT_STAGES
+
+    # ساخت set از user_idهایی که باید پیام بگیرن
+    changed_map = {ch["user_id"]: ch for ch in changed}
+    notif_users = set(changed_map.keys()) | set(boost_map.keys()) | set(adv_map.keys())
+
+    for uid in notif_users:
         try:
-            u = await get_user(ch["user_id"])
-            if not u: continue
+            u = await get_user(uid)
+            if not u:
+                continue
             lang = u["lang"]
             t1 = tname(m["team1"], lang); t2 = tname(m["team2"], lang)
-            delta = ch["new_pts"] - (ch["old_pts"] or 0)
-            sign = "+" if delta >= 0 else ""
+
             if lang == "fa":
                 txt = ("🔧 <b>نتیجه یک بازی اصلاح شد</b>\n\n"
                        f"{f1} {t1}  <b>{r1}-{r2}</b>  {t2} {f2}\n")
                 if p1 is not None:
                     txt += f"پنالتی: {p1}-{p2}\n"
-                txt += (f"\nپیش‌بینی تو: {ch['pred1']}-{ch['pred2']}\n"
-                        f"امتیاز قبلی: {ch['old_pts'] or 0}\n"
-                        f"امتیاز جدید: <b>{ch['new_pts']}</b> ({sign}{delta})")
             else:
                 txt = ("🔧 <b>A match result was corrected</b>\n\n"
                        f"{f1} {t1}  <b>{r1}-{r2}</b>  {t2} {f2}\n")
                 if p1 is not None:
                     txt += f"Penalties: {p1}-{p2}\n"
-                txt += (f"\nYour pick: {ch['pred1']}-{ch['pred2']}\n"
-                        f"Old points: {ch['old_pts'] or 0}\n"
-                        f"New points: <b>{ch['new_pts']}</b> ({sign}{delta})")
-            await bot.send_message(u["user_id"], txt, parse_mode="HTML")
+
+            txt += "\n"
+
+            # تغییر امتیاز پیش‌بینی
+            if uid in changed_map:
+                ch = changed_map[uid]
+                delta = ch["new_pts"] - (ch["old_pts"] or 0)
+                sign = "+" if delta >= 0 else ""
+                boost_note = ""
+                if uid in boost_map:
+                    boost_note = " 🚀×۲" if lang == "fa" else " 🚀×2"
+                if lang == "fa":
+                    txt += (f"پیش‌بینی تو: {ch['pred1']}-{ch['pred2']}\n"
+                            f"امتیاز قبلی: {ch['old_pts'] or 0}\n"
+                            f"امتیاز جدید: <b>{ch['new_pts']}</b>{boost_note} ({sign}{delta})\n")
+                else:
+                    txt += (f"Your pick: {ch['pred1']}-{ch['pred2']}\n"
+                            f"Old points: {ch['old_pts'] or 0}\n"
+                            f"New points: <b>{ch['new_pts']}</b>{boost_note} ({sign}{delta})\n")
+            elif uid in boost_map:
+                # بوست داشت ولی امتیاز پیش‌بینی تغییر نکرد
+                b = boost_map[uid]
+                if lang == "fa":
+                    txt += f"🚀 بوست ×۲ اعمال شد: {b['old_pts']}→{b['new_pts']}\n"
+                else:
+                    txt += f"🚀 Boost ×2 applied: {b['old_pts']}→{b['new_pts']}\n"
+
+            # امتیاز صعود
+            if is_knockout and uid in adv_map:
+                adv = adv_map[uid]
+                adv_pts = adv["points"]
+                adv_team = tname(adv["team"], lang)
+                if lang == "fa":
+                    txt += (f"🏆 پیش‌بینی صعود: {adv_team} → "
+                            f"<b>+{adv_pts}</b> {'✅' if adv_pts > 0 else '❌'}\n")
+                else:
+                    txt += (f"🏆 Advancement pick: {adv_team} → "
+                            f"<b>+{adv_pts}</b> {'✅' if adv_pts > 0 else '❌'}\n")
+
+            await bot.send_message(uid, txt, parse_mode="HTML")
             await asyncio.sleep(0.05)
         except Exception as e:
-            log.warning(f"Correction notice to {ch['user_id']}: {e}")
+            log.warning(f"Correction notice to {uid}: {e}")
 
 # ── sync کردن api_id ها ─────────────────────
 
@@ -255,7 +295,6 @@ async def sync_api_ids():
             api_id = am.get("id")
             if not home or not away or not api_id:
                 continue
-            # FIX: پرانتزها — قبلاً api_id IS NULL فقط به شاخه دوم میچسبید و باعث بازنویسی میشد
             result = await conn.execute("""
                 UPDATE matches SET api_id=$1
                 WHERE ((team1=$2 AND team2=$3) OR (team1=$3 AND team2=$2))

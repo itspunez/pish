@@ -386,13 +386,23 @@ async def update_match_teams(match_id, team1, team2):
                 WHERE id=$3
             """, team1, team2, match_id)
 
-async def set_result(match_id, r1, r2, penalty1=None, penalty2=None, force=False):
+async def set_result(match_id, r1, r2, penalty1=None, penalty2=None, force=False,
+                     et1=None, et2=None):
     """ثبت نتیجه + محاسبه امتیاز + تعیین برنده
+
     force=True → حتی اگه بازی finished باشه، نتیجه و امتیازها بازنویسی میشن (اصلاح)
 
     امتیازدهی همیشه بر اساس نتیجه ۹۰ دقیقه (r1, r2) انجام میشه.
-    برای پر کردن جدول مراحل حذفی، اگه تساوی بود از پنالتی برنده مشخص میشه.
+    برای bracket_winner (پر کردن جدول):
+      1. اگه بازی ۹۰ دقیقه برنده داشت → از r1/r2
+      2. اگه تساوی بود و وقت اضافه داریم (et1/et2) → از نتیجه وقت اضافه
+      3. اگه هنوز مساوی بود و پنالتی داریم (penalty1/penalty2) → از پنالتی
     """
+    import re as _re
+    def _is_placeholder(name):
+        if not name: return True
+        return bool(_re.fullmatch(r"[1-3][A-L]+|W\d{1,3}|L\d{1,3}", name.strip()))
+
     pool = await get_pool()
     async with pool.acquire() as conn:
         async with conn.transaction():
@@ -410,9 +420,12 @@ async def set_result(match_id, r1, r2, penalty1=None, penalty2=None, force=False
             else:
                 scoring_winner = None  # تساوی → امتیاز تساوی
 
-            # برنده برای پر کردن بازی بعدی (جدول): اگه تساوی بود از پنالتی استفاده میشه
+            # برنده برای bracket: ۹۰ دقیقه → وقت اضافه → پنالتی
             if scoring_winner:
                 bracket_winner = scoring_winner
+            elif et1 is not None and et2 is not None and et1 != et2:
+                # وقت اضافه برنده داشت (مثلاً 1-1 → 2-1 بعد از AET)
+                bracket_winner = m["team1"] if et1 > et2 else m["team2"]
             elif penalty1 is not None and penalty2 is not None:
                 bracket_winner = m["team1"] if penalty1 > penalty2 else m["team2"]
             else:
@@ -441,19 +454,47 @@ async def set_result(match_id, r1, r2, penalty1=None, penalty2=None, force=False
                         "old_pts": old_pts, "new_pts": new_pts,
                     })
 
-            # پر کردن بازی بعدی با برنده جدول (bracket_winner)
-            if bracket_winner and m["next_match_id"]:
-                next_m = await conn.fetchrow(
-                    "SELECT * FROM matches WHERE id=$1", m["next_match_id"])
-                if next_m:
-                    if not next_m["team1"] or next_m["team1"].startswith("TBD"):
-                        await conn.execute(
-                            "UPDATE matches SET team1=$1 WHERE id=$2",
-                            bracket_winner, m["next_match_id"])
-                    elif not next_m["team2"] or next_m["team2"].startswith("TBD"):
-                        await conn.execute(
-                            "UPDATE matches SET team2=$1 WHERE id=$2",
-                            bracket_winner, m["next_match_id"])
+            # پر کردن بازی بعدی با bracket_winner — هم next_match_id هم W{api_id}
+            if bracket_winner:
+                w_placeholder = f"W{m['api_id']}" if m["api_id"] else None
+                l_placeholder = f"L{m['api_id']}" if m["api_id"] else None
+                loser = m["team2"] if bracket_winner == m["team1"] else m["team1"]
+
+                # روش ۱: next_match_id مستقیم (اگه ست شده باشه)
+                if m["next_match_id"]:
+                    next_m = await conn.fetchrow(
+                        "SELECT * FROM matches WHERE id=$1", m["next_match_id"])
+                    if next_m:
+                        if _is_placeholder(next_m["team1"]):
+                            await conn.execute(
+                                "UPDATE matches SET team1=$1 WHERE id=$2",
+                                bracket_winner, m["next_match_id"])
+                        elif _is_placeholder(next_m["team2"]):
+                            await conn.execute(
+                                "UPDATE matches SET team2=$1 WHERE id=$2",
+                                bracket_winner, m["next_match_id"])
+
+                # روش ۲: جستجو بر اساس placeholder W{api_id} در همه بازی‌ها
+                elif w_placeholder:
+                    await conn.execute("""
+                        UPDATE matches SET team1=$1
+                        WHERE team1=$2 AND is_finished=FALSE
+                    """, bracket_winner, w_placeholder)
+                    await conn.execute("""
+                        UPDATE matches SET team2=$1
+                        WHERE team2=$2 AND is_finished=FALSE
+                    """, bracket_winner, w_placeholder)
+
+                # پر کردن بازی سوم (L placeholder) با بازنده
+                if l_placeholder and loser:
+                    await conn.execute("""
+                        UPDATE matches SET team1=$1
+                        WHERE team1=$2 AND is_finished=FALSE
+                    """, loser, l_placeholder)
+                    await conn.execute("""
+                        UPDATE matches SET team2=$1
+                        WHERE team2=$2 AND is_finished=FALSE
+                    """, loser, l_placeholder)
 
             return len(preds), bracket_winner, changed
 
@@ -655,7 +696,9 @@ async def league_leaderboard(league_id: int, limit=100):
     async with pool.acquire() as conn:
         return await conn.fetch("""
             SELECT u.user_id, u.display_name,
-                   COALESCE(SUM(p.points),0) AS total,
+                   COALESCE(SUM(p.points),0)
+                   + COALESCE((SELECT SUM(a.points) FROM advancement_predictions a
+                                WHERE a.user_id=u.user_id),0) AS total,
                    COUNT(p.id) AS preds,
                    COUNT(*) FILTER (WHERE p.points=10) AS exact_c
             FROM league_members lm
@@ -820,9 +863,18 @@ async def score_advancements(match_id: int, winner_team: str) -> list:
 
 async def apply_boosts_to_predictions(match_id: int) -> list:
     """بعد از محاسبه امتیاز پیش‌بینی، بوست‌های این بازی رو اعمال کن (ضربدر ۲).
+    ایمن در برابر فراخوانی چندباره: امتیاز پایه رو از calc_points محاسبه میکنه،
+    نه از مقدار فعلی جدول — پس دوباره صدا زدن تاثیر مضاعف ندارد.
     برمیگردونه لیست {user_id, old_pts, new_pts}"""
     pool = await get_pool()
     async with pool.acquire() as conn:
+        # ابتدا نتیجه بازی رو بگیر تا امتیاز پایه رو از calc_points بسازیم
+        match = await conn.fetchrow(
+            "SELECT result1, result2 FROM matches WHERE id=$1", match_id)
+        if not match or match["result1"] is None:
+            return []
+        r1, r2 = match["result1"], match["result2"]
+
         boosted_users = await conn.fetch(
             "SELECT user_id FROM boosts WHERE match_id=$1", match_id)
         changed = []
@@ -830,13 +882,15 @@ async def apply_boosts_to_predictions(match_id: int) -> list:
             uid = b["user_id"]
             pred = await conn.fetchrow(
                 "SELECT * FROM predictions WHERE user_id=$1 AND match_id=$2", uid, match_id)
-            if pred and pred["points"] is not None:
-                old_pts = pred["points"]
-                new_pts = old_pts * 2
+            if pred and pred["pred1"] is not None:
+                # امتیاز پایه (بدون بوست) — همیشه یکسان صرف‌نظر از فراخوانی قبلی
+                base_pts = calc_points(pred["pred1"], pred["pred2"], r1, r2)
+                boosted_pts = base_pts * 2
+                old_pts = pred["points"]  # برای نمایش در پیام
                 await conn.execute(
                     "UPDATE predictions SET points=$1 WHERE user_id=$2 AND match_id=$3",
-                    new_pts, uid, match_id)
-                changed.append({"user_id": uid, "old_pts": old_pts, "new_pts": new_pts})
+                    boosted_pts, uid, match_id)
+                changed.append({"user_id": uid, "old_pts": old_pts, "new_pts": boosted_pts})
         return changed
 
 async def get_user_knockout_stats(user_id: int):
