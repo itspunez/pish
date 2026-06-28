@@ -89,6 +89,33 @@ async def init_db():
         CREATE INDEX IF NOT EXISTS idx_match_api_id   ON matches(api_id);
         CREATE INDEX IF NOT EXISTS idx_lm_user        ON league_members(user_id);
         CREATE INDEX IF NOT EXISTS idx_league_code    ON leagues(invite_code);
+
+        -- ── BOOSTS ────────────────────────────────────────────────────────────
+        -- هر کاربر در هر مرحله حذفی فقط یک بوستر ×۲ می‌تونه فعال کنه
+        CREATE TABLE IF NOT EXISTS boosts (
+            id         SERIAL PRIMARY KEY,
+            user_id    BIGINT NOT NULL REFERENCES users(user_id),
+            match_id   INT    NOT NULL REFERENCES matches(id),
+            stage      TEXT   NOT NULL,
+            created_at TIMESTAMPTZ DEFAULT NOW(),
+            UNIQUE(user_id, stage)   -- فقط یه بار در هر مرحله
+        );
+        CREATE INDEX IF NOT EXISTS idx_boost_user  ON boosts(user_id);
+        CREATE INDEX IF NOT EXISTS idx_boost_match ON boosts(match_id);
+
+        -- ── ADVANCEMENT PREDICTIONS ────────────────────────────────────────────
+        -- پیش‌بینی تیم صعودکننده در بازی‌های حذفی (+۵ امتیاز اگه درست بود)
+        CREATE TABLE IF NOT EXISTS advancement_predictions (
+            id         SERIAL PRIMARY KEY,
+            user_id    BIGINT NOT NULL REFERENCES users(user_id),
+            match_id   INT    NOT NULL REFERENCES matches(id),
+            team       TEXT   NOT NULL,   -- نام تیمی که پیش‌بینی صعود کرده
+            points     INT    DEFAULT NULL,
+            updated_at TIMESTAMPTZ DEFAULT NOW(),
+            UNIQUE(user_id, match_id)
+        );
+        CREATE INDEX IF NOT EXISTS idx_adv_user  ON advancement_predictions(user_id);
+        CREATE INDEX IF NOT EXISTS idx_adv_match ON advancement_predictions(match_id);
         """)
 
 async def bulk_insert_group_matches(matches: list):
@@ -528,7 +555,9 @@ async def leaderboard(limit=50):
     async with pool.acquire() as conn:
         return await conn.fetch("""
             SELECT u.user_id, u.display_name,
-                   COALESCE(SUM(p.points),0) AS total,
+                   COALESCE(SUM(p.points),0)
+                   + COALESCE((SELECT SUM(a.points) FROM advancement_predictions a
+                                WHERE a.user_id=u.user_id),0) AS total,
                    COUNT(p.id) AS preds,
                    COUNT(*) FILTER (WHERE p.points=10) AS exact_c
             FROM users u LEFT JOIN predictions p ON p.user_id=u.user_id
@@ -537,13 +566,17 @@ async def leaderboard(limit=50):
         """, limit)
 
 async def get_user_rank(user_id):
-    """رتبه کاربر در رده‌بندی کلی (سازگار با leaderboard — همه کاربرا، نه فقط کسانی که پیش‌بینی کردن)"""
+    """رتبه کاربر در رده‌بندی کلی (شامل امتیاز صعود)"""
     pool = await get_pool()
     async with pool.acquire() as conn:
         return await conn.fetchval("""
             SELECT rank FROM (
                 SELECT u.user_id,
-                       RANK() OVER (ORDER BY COALESCE(SUM(p.points),0) DESC) AS rank
+                       RANK() OVER (ORDER BY
+                           COALESCE(SUM(p.points),0)
+                           + COALESCE((SELECT SUM(a.points) FROM advancement_predictions a
+                                        WHERE a.user_id=u.user_id),0)
+                       DESC) AS rank
                 FROM users u LEFT JOIN predictions p ON p.user_id=u.user_id
                 GROUP BY u.user_id
             ) t WHERE user_id=$1
@@ -658,3 +691,166 @@ async def get_league_members(league_id: int):
             FROM league_members lm JOIN users u ON u.user_id=lm.user_id
             WHERE lm.league_id=$1
         """, league_id)
+
+# ── BOOSTS ─────────────────────────────────────
+
+async def get_boost(user_id: int, stage: str):
+    """بوستر کاربر در یک مرحله (یا None اگه نزده)"""
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        return await conn.fetchrow(
+            "SELECT * FROM boosts WHERE user_id=$1 AND stage=$2",
+            user_id, stage)
+
+async def set_boost(user_id: int, match_id: int, stage: str) -> str:
+    """ثبت/تغییر/حذف بوستر.
+    قوانین:
+    - اگه بازی مورد نظر قفل شده → 'locked' (نه ثبت، نه تغییر، نه حذف)
+    - اگه بوست قبلی روی بازی قفل‌شده‌ست → 'prev_locked' (بوست قدیمی رو نمیشه عوض کرد)
+    - اگه دوباره همون بازی باز رو زدی → 'removed' (toggle حذف)
+    - اگه بوست قبلی داشتی روی بازی باز → 'changed' (انتقال)
+    - اگه اولین باره → 'ok'
+    """
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        async with conn.transaction():
+            # چک: بازی انتخابی قفل نباشه
+            m = await conn.fetchrow(
+                "SELECT is_locked FROM matches WHERE id=$1", match_id)
+            if not m or m["is_locked"]:
+                return "locked"
+
+            existing = await conn.fetchrow(
+                "SELECT b.*, mx.is_locked AS prev_locked "
+                "FROM boosts b JOIN matches mx ON mx.id=b.match_id "
+                "WHERE b.user_id=$1 AND b.stage=$2",
+                user_id, stage)
+
+            if existing:
+                if existing["prev_locked"]:
+                    # بازی قبلی شروع شده — نمیشه بوست رو جابجا یا حذف کرد
+                    return "prev_locked"
+                if existing["match_id"] == match_id:
+                    # toggle: حذف بوست (فقط اگه بازی هنوز باز باشه)
+                    await conn.execute(
+                        "DELETE FROM boosts WHERE user_id=$1 AND stage=$2", user_id, stage)
+                    return "removed"
+                # انتقال بوست از بازی قبلی (باز) به بازی جدید (باز)
+                await conn.execute("""
+                    UPDATE boosts SET match_id=$1, created_at=NOW()
+                    WHERE user_id=$2 AND stage=$3
+                """, match_id, user_id, stage)
+                return "changed"
+
+            await conn.execute("""
+                INSERT INTO boosts(user_id, match_id, stage) VALUES($1,$2,$3)
+            """, user_id, match_id, stage)
+            return "ok"
+
+async def get_user_boosts(user_id: int):
+    """همه بوست‌های کاربر"""
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        return await conn.fetch(
+            "SELECT * FROM boosts WHERE user_id=$1", user_id)
+
+async def get_match_boost_users(match_id: int):
+    """کاربرایی که این بازی رو بوست کردن"""
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        return await conn.fetch(
+            "SELECT user_id FROM boosts WHERE match_id=$1", match_id)
+
+# ── ADVANCEMENT PREDICTIONS ────────────────────
+
+async def save_advancement(user_id: int, match_id: int, team: str) -> str:
+    """ثبت پیش‌بینی تیم صعودکننده.
+    خروجی: 'ok' | 'locked' | 'invalid_team'"""
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        async with conn.transaction():
+            m = await conn.fetchrow(
+                "SELECT is_locked, team1, team2 FROM matches WHERE id=$1 FOR UPDATE", match_id)
+            if not m or m["is_locked"]:
+                return "locked"
+            if team not in (m["team1"], m["team2"]):
+                return "invalid_team"
+            await conn.execute("""
+                INSERT INTO advancement_predictions(user_id, match_id, team)
+                VALUES($1,$2,$3)
+                ON CONFLICT(user_id, match_id) DO UPDATE
+                  SET team=$3, points=NULL, updated_at=NOW()
+            """, user_id, match_id, team)
+            return "ok"
+
+async def get_advancement(user_id: int, match_id: int):
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        return await conn.fetchrow(
+            "SELECT * FROM advancement_predictions WHERE user_id=$1 AND match_id=$2",
+            user_id, match_id)
+
+async def score_advancements(match_id: int, winner_team: str) -> list:
+    """بعد از مشخص شدن برنده، امتیاز پیش‌بینی صعود رو محاسبه کن (+۵ یا ۰)."""
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        preds = await conn.fetch(
+            "SELECT * FROM advancement_predictions WHERE match_id=$1", match_id)
+        changed = []
+        for p in preds:
+            pts = 5 if p["team"] == winner_team else 0
+            await conn.execute(
+                "UPDATE advancement_predictions SET points=$1 WHERE id=$2", pts, p["id"])
+            changed.append({"user_id": p["user_id"], "team": p["team"], "points": pts})
+        return changed
+
+async def apply_boosts_to_predictions(match_id: int) -> list:
+    """بعد از محاسبه امتیاز پیش‌بینی، بوست‌های این بازی رو اعمال کن (ضربدر ۲).
+    برمیگردونه لیست {user_id, old_pts, new_pts}"""
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        boosted_users = await conn.fetch(
+            "SELECT user_id FROM boosts WHERE match_id=$1", match_id)
+        changed = []
+        for b in boosted_users:
+            uid = b["user_id"]
+            pred = await conn.fetchrow(
+                "SELECT * FROM predictions WHERE user_id=$1 AND match_id=$2", uid, match_id)
+            if pred and pred["points"] is not None:
+                old_pts = pred["points"]
+                new_pts = old_pts * 2
+                await conn.execute(
+                    "UPDATE predictions SET points=$1 WHERE user_id=$2 AND match_id=$3",
+                    new_pts, uid, match_id)
+                changed.append({"user_id": uid, "old_pts": old_pts, "new_pts": new_pts})
+        return changed
+
+async def get_user_knockout_stats(user_id: int):
+    """آمار بوست‌ها و پیش‌بینی صعود کاربر"""
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        adv_total = await conn.fetchval(
+            "SELECT COALESCE(SUM(points),0) FROM advancement_predictions WHERE user_id=$1",
+            user_id) or 0
+        adv_correct = await conn.fetchval(
+            "SELECT COUNT(*) FROM advancement_predictions WHERE user_id=$1 AND points=5",
+            user_id) or 0
+        boost_count = await conn.fetchval(
+            "SELECT COUNT(*) FROM boosts WHERE user_id=$1", user_id) or 0
+        return {
+            "adv_total": int(adv_total),
+            "adv_correct": int(adv_correct),
+            "boost_count": int(boost_count),
+        }
+
+async def get_leaderboard_total(user_id: int) -> int:
+    """مجموع کل امتیاز کاربر: پیش‌بینی + صعود (بوست داخل predictions محاسبه شده)"""
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        pred_pts = await conn.fetchval(
+            "SELECT COALESCE(SUM(points),0) FROM predictions WHERE user_id=$1",
+            user_id) or 0
+        adv_pts = await conn.fetchval(
+            "SELECT COALESCE(SUM(points),0) FROM advancement_predictions WHERE user_id=$1",
+            user_id) or 0
+        return int(pred_pts) + int(adv_pts)

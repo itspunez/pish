@@ -18,6 +18,7 @@ from handlers.user import (
     cmd_start, cb_lang, cb_show_stages, cb_stage, cb_round, cb_group,
     cb_locked_info, cb_noop, cb_predict_start, handle_prediction_input,
     cmd_cancel, cb_mystats, cb_leaderboard, cb_main, cb_changelang,
+    cb_boost, cb_advancement_start, cb_advancement_pick,
     PREDICT_INPUT
 )
 from handlers.admin import (
@@ -260,6 +261,10 @@ def main():
     app.add_handler(CallbackQueryHandler(cb_noop,        pattern="^noop$"))
     app.add_handler(CallbackQueryHandler(cb_mystats,     pattern="^mystats$"))
     app.add_handler(CallbackQueryHandler(cb_leaderboard, pattern="^leaderboard$"))
+    # ── Boost & Advancement ──
+    app.add_handler(CallbackQueryHandler(cb_boost,             pattern=r"^boost_\d+_\w+$"))
+    app.add_handler(CallbackQueryHandler(cb_advancement_start, pattern=r"^adv_\d+$"))
+    app.add_handler(CallbackQueryHandler(cb_advancement_pick,  pattern=r"^advpick_"))
 
     # ── League ──
     app.add_handler(CallbackQueryHandler(cb_leagues_menu,   pattern="^leagues$"))

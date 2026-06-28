@@ -4,7 +4,9 @@ from telegram.ext import ContextTypes, ConversationHandler
 from database import (
     upsert_user, get_user, get_group_matches,
     get_all_matches, get_match, get_prediction,
-    save_prediction, get_user_stats, leaderboard, get_user_rank
+    save_prediction, get_user_stats, leaderboard, get_user_rank,
+    get_boost, set_boost, get_advancement, save_advancement,
+    get_user_knockout_stats,
 )
 from wc_data import STAGE_LABEL, KNOCKOUT_ORDER
 from utils import flag, tname, fmt_time, fmt_pred, make_display_name, parse_score
@@ -47,14 +49,20 @@ async def _send_main(send_fn, u, lang):
                 "📐 تفاضل گل درست → <b>۷ امتیاز</b>\n"
                 "✔️ فقط برنده درست → <b>۵ امتیاز</b>\n"
                 "❌ اشتباه (ولی شرکت کردی) → <b>۲ امتیاز</b>\n"
-                "⭕ پیش‌بینی نکردی → <b>۰ امتیاز</b>")
+                "⭕ پیش‌بینی نکردی → <b>۰ امتیاز</b>\n\n"
+                "━━━━━━━━━━━━━━━━━\n"
+                "🚀 <b>بوستر ×۲</b>: در هر مرحله حذفی یک بازی رو انتخاب کن — امتیازش دو برابر میشه!\n"
+                "🏆 <b>پیش‌بینی صعود</b>: پیش‌بینی کن کدوم تیم از هر بازی حذفی صعود می‌کنه → <b>+۵ امتیاز</b>")
     else:
         text = (f"Hello {name}! 👋\n\n🏆 <b>FIFA World Cup 2026 Prediction Bot</b>\n\n"
                 "🎯 Exact score → <b>10 pts</b>\n"
                 "📐 Correct goal diff → <b>7 pts</b>\n"
                 "✔️ Correct winner only → <b>5 pts</b>\n"
                 "❌ Wrong (participated) → <b>2 pts</b>\n"
-                "⭕ No prediction → <b>0 pts</b>")
+                "⭕ No prediction → <b>0 pts</b>\n\n"
+                "━━━━━━━━━━━━━━━━━\n"
+                "🚀 <b>Boost ×2</b>: Each knockout stage, pick one match — points doubled!\n"
+                "🏆 <b>Advancement</b>: Predict who advances from each knockout match → <b>+5 pts</b>")
     kb = [
         [Btn("⚽ پیش‌بینی بازی‌ها" if lang=="fa" else "⚽ Predict Matches",
              callback_data="show_stages")],
@@ -119,7 +127,7 @@ async def cb_stage(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                 reply_markup=Markup([[Btn("🔙", callback_data="show_stages")]]))
             return
         lbl = STAGE_LABEL.get(stage,{}).get(lang, stage)
-        await _show_knockout_list(query, lang, matches, lbl)
+        await _show_knockout_list(query, lang, matches, lbl, user_id=query.from_user.id)
 
 async def _show_round_selector(query, lang):
     all_group = await get_group_matches()
@@ -212,15 +220,85 @@ async def cb_group(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     kb.append([Btn("🔙 برگشت" if lang=="fa" else "🔙 Back", callback_data=f"round_{round_no}")])
     await query.edit_message_text(txt, parse_mode="HTML", reply_markup=Markup(kb))
 
-async def _show_knockout_list(query, lang, matches, lbl):
+async def _show_knockout_list(query, lang, matches, lbl, user_id=None):
+    """نمایش لیست بازی‌های حذفی با دکمه‌های بوست و پیش‌بینی صعود"""
+    from database import get_match as _get_match
+    stage = matches[0]["stage"] if matches else None
+
+    # بوست فعلی کاربر در این مرحله (شامل بازی‌های قفل‌شده هم میشه)
+    current_boost = None
+    boosted_m = None
+    boost_is_locked = False
+    if user_id and stage:
+        current_boost = await get_boost(user_id, stage)
+        if current_boost:
+            boosted_m = await _get_match(current_boost["match_id"])
+            boost_is_locked = bool(boosted_m and boosted_m["is_locked"])
+
     txt = f"<b>⚽ {lbl}</b>\n\n"
+    if stage and stage != "group":
+        if lang == "fa":
+            txt += "🚀 <b>بوستر ×۲</b>: روی یک بازی می‌تونی ضریب بزنی — هر مرحله فقط یک بار!\n"
+            txt += "🏆 <b>پیش‌بینی صعود</b>: پیش‌بینی کن کدوم تیم صعود می‌کنه (+۵ امتیاز)\n\n"
+        else:
+            txt += "🚀 <b>Boost ×2</b>: Double your points on one match — once per stage!\n"
+            txt += "🏆 <b>Advancement</b>: Predict who advances (+5 pts)\n\n"
+
+    # اگه بوست روی بازی قفل‌شده‌ست، اطلاع بده
+    if boost_is_locked and boosted_m:
+        f1b = flag(boosted_m["team1"]); f2b = flag(boosted_m["team2"])
+        if lang == "fa":
+            txt += (f"🚀 <b>بوست فعال شما:</b> {f1b} {tname(boosted_m['team1'],lang)} "
+                    f"vs {tname(boosted_m['team2'],lang)} {f2b} 🔒\n"
+                    f"⚠️ بازی شروع شده — بوست قابل تغییر نیست\n\n")
+        else:
+            txt += (f"🚀 <b>Your active boost:</b> {f1b} {tname(boosted_m['team1'],lang)} "
+                    f"vs {tname(boosted_m['team2'],lang)} {f2b} 🔒\n"
+                    f"⚠️ Match started — boost is locked in\n\n")
+
     kb = []
     for m in matches:
         f1, f2 = flag(m["team1"]), flag(m["team2"])
-        t1, t2 = tname(m["team1"],lang), tname(m["team2"],lang)
-        txt += f"{f1} {t1} vs {t2} {f2}\n🗓 {fmt_time(m['match_time'],lang)}\n\n"
-        kb.append([Btn(f"{f1} {m['team1']} vs {m['team2']} {f2}",
-                       callback_data=f"predict_{m['id']}")])
+        t1, t2 = tname(m["team1"], lang), tname(m["team2"], lang)
+
+        pred = None
+        adv = None
+        if user_id:
+            pred = await get_prediction(user_id, m["id"])
+            adv = await get_advancement(user_id, m["id"])
+
+        is_boosted = current_boost and current_boost["match_id"] == m["id"]
+        boost_icon = "🚀" if is_boosted else ""
+        adv_icon = f"🏆{flag(adv['team'])}" if adv else ""
+
+        pred_txt = f"{pred['pred1']}-{pred['pred2']}" if pred else ("؟" if lang=="fa" else "?")
+        txt += f"{boost_icon}{f1} {t1} vs {t2} {f2}\n"
+        txt += f"🗓 {fmt_time(m['match_time'],lang)}\n"
+        txt += f"{'پیش‌بینی' if lang=='fa' else 'Pick'}: {pred_txt}"
+        if adv_icon:
+            txt += f"  {adv_icon} {tname(adv['team'],lang)}"
+        txt += "\n\n"
+
+        kb.append([Btn(
+            f"{'✏️' if pred else '⚽'} {f1} {m['team1']} vs {m['team2']} {f2}",
+            callback_data=f"predict_{m['id']}"
+        )])
+
+        row2 = []
+        # دکمه بوست: اگه بوست روی بازی قفل‌شده‌ست → دکمه غیرقابل تغییر
+        if boost_is_locked and not is_boosted:
+            boost_lbl = ("🔒 بوست قفل شده" if lang=="fa" else "🔒 Boost locked")
+        elif is_boosted:
+            boost_lbl = ("🚀 حذف بوست" if lang=="fa" else "🚀 Remove Boost")
+        else:
+            boost_lbl = ("🚀 بوست ×۲" if lang=="fa" else "🚀 Boost ×2")
+        row2.append(Btn(boost_lbl, callback_data=f"boost_{m['id']}_{stage}"))
+
+        adv_lbl = (f"🏆 {'تغییر صعود' if adv else 'پیش‌بینی صعود'}" if lang=="fa"
+                   else f"🏆 {'Change Adv.' if adv else 'Who Advances?'}")
+        row2.append(Btn(adv_lbl, callback_data=f"adv_{m['id']}"))
+        kb.append(row2)
+
     kb.append([Btn("🔙 برگشت" if lang=="fa" else "🔙 Back", callback_data="show_stages")])
     await query.edit_message_text(txt, parse_mode="HTML", reply_markup=Markup(kb))
 
@@ -354,25 +432,36 @@ async def cb_mystats(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     lang = user["lang"]
     stats = await get_user_stats(query.from_user.id)
     rank  = await get_user_rank(query.from_user.id)
+    ko_stats = await get_user_knockout_stats(query.from_user.id)
+
+    total_all = stats["total"] + ko_stats["adv_total"]
 
     if lang == "fa":
         txt = (f"📊 <b>آمار {user['display_name']}</b>\n\n"
-               f"⭐ کل امتیاز: <b>{stats['total']}</b>\n🏅 رتبه: <b>{rank}</b>\n\n"
+               f"⭐ کل امتیاز: <b>{total_all}</b>\n🏅 رتبه: <b>{rank}</b>\n\n"
                f"🎯 کل پیش‌بینی‌ها: {stats['total_preds']}\n"
                f"✅ بازی‌های تموم‌شده: {stats['finished']}\n\n"
                f"🏆 نتیجه دقیق (۱۰): {stats['exact_c']}\n"
                f"📐 تفاضل درست (۷): {stats['diff_c']}\n"
                f"✔️ برنده درست (۵): {stats['winner_c']}\n"
-               f"❌ اشتباه (۲): {stats['wrong_c']}\n\n<b>آخرین ۵ پیش‌بینی:</b>")
+               f"❌ اشتباه (۲): {stats['wrong_c']}\n\n"
+               f"🏆 امتیاز صعود: <b>{ko_stats['adv_total']}</b> "
+               f"({ko_stats['adv_correct']} درست)\n"
+               f"🚀 بوست‌های فعال: {ko_stats['boost_count']}\n\n"
+               f"<b>آخرین ۵ پیش‌بینی:</b>")
     else:
         txt = (f"📊 <b>Stats: {user['display_name']}</b>\n\n"
-               f"⭐ Total: <b>{stats['total']}</b>\n🏅 Rank: <b>{rank}</b>\n\n"
+               f"⭐ Total: <b>{total_all}</b>\n🏅 Rank: <b>{rank}</b>\n\n"
                f"🎯 Predictions: {stats['total_preds']}\n"
                f"✅ Finished: {stats['finished']}\n\n"
                f"🏆 Exact (10): {stats['exact_c']}\n"
                f"📐 Diff (7): {stats['diff_c']}\n"
                f"✔️ Winner (5): {stats['winner_c']}\n"
-               f"❌ Wrong (2): {stats['wrong_c']}\n\n<b>Last 5 predictions:</b>")
+               f"❌ Wrong (2): {stats['wrong_c']}\n\n"
+               f"🏆 Advancement pts: <b>{ko_stats['adv_total']}</b> "
+               f"({ko_stats['adv_correct']} correct)\n"
+               f"🚀 Active boosts: {ko_stats['boost_count']}\n\n"
+               f"<b>Last 5 predictions:</b>")
 
     for p in stats["last5"]:
         f1, f2 = flag(p["team1"]), flag(p["team2"])
@@ -432,3 +521,121 @@ async def cb_locked_info(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
 async def cb_noop(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     await update.callback_query.answer()
+
+# ── BOOST HANDLER ──────────────────────────────
+
+async def cb_boost(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """callback_data: boost_{match_id}_{stage}"""
+    query = update.callback_query
+    parts = query.data.split("_")
+    match_id = int(parts[1])
+    stage = parts[2]
+    user = await get_user(query.from_user.id)
+    if not user:
+        await query.answer("اول /start بزن!", show_alert=True)
+        return
+    lang = user["lang"]
+
+    result = await set_boost(query.from_user.id, match_id, stage)
+
+    if result == "locked":
+        await query.answer(
+            "⛔ این بازی شروع شده — نمیشه بوست کرد!" if lang=="fa"
+            else "⛔ Match has started!", show_alert=True)
+        return
+    elif result == "prev_locked":
+        await query.answer(
+            "⛔ بوست قبلیت روی بازی‌ای‌ه که شروع شده — دیگه نمیشه تغییر داد!" if lang=="fa"
+            else "⛔ Your boost is on a match that already started — can't change it!", show_alert=True)
+        return
+    elif result == "removed":
+        await query.answer(
+            "❌ بوست ×۲ حذف شد." if lang=="fa" else "❌ Boost removed.", show_alert=True)
+    elif result == "changed":
+        await query.answer(
+            "🚀 بوست ×۲ منتقل شد به این بازی!" if lang=="fa"
+            else "🚀 Boost moved to this match!", show_alert=True)
+    else:
+        await query.answer(
+            "🚀 بوست ×۲ فعال شد! امتیاز این بازی دو برابر میشه." if lang=="fa"
+            else "🚀 Boost ×2 activated! Points doubled for this match.", show_alert=True)
+
+    # refresh صفحه
+    matches = [m for m in await get_all_matches(stage)
+               if not m["is_locked"] and not m["is_finished"]]
+    if matches:
+        from wc_data import STAGE_LABEL
+        lbl = STAGE_LABEL.get(stage,{}).get(lang, stage)
+        await _show_knockout_list(query, lang, matches, lbl, user_id=query.from_user.id)
+
+# ── ADVANCEMENT HANDLER ────────────────────────
+
+async def cb_advancement_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """callback_data: adv_{match_id} — نمایش دکمه‌های انتخاب تیم صعودکننده"""
+    query = update.callback_query
+    await query.answer()
+    match_id = int(query.data.split("_")[1])
+    m = await get_match(match_id)
+    user = await get_user(query.from_user.id)
+    lang = user["lang"] if user else "fa"
+
+    if not m or m["is_locked"]:
+        await query.answer(
+            "⛔ این بازی قفل شده!" if lang=="fa" else "⛔ Match locked!", show_alert=True)
+        return
+
+    f1, f2 = flag(m["team1"]), flag(m["team2"])
+    t1, t2 = tname(m["team1"], lang), tname(m["team2"], lang)
+    existing = await get_advancement(query.from_user.id, match_id)
+
+    if lang == "fa":
+        txt = (f"🏆 <b>پیش‌بینی صعودکننده</b>\n\n"
+               f"{f1} {t1}  vs  {t2} {f2}\n\n"
+               f"{'✅ پیش‌بینی فعلی: ' + tname(existing['team'],lang) if existing else ''}\n"
+               f"کدوم تیم صعود می‌کنه؟ (+۵ امتیاز)")
+    else:
+        txt = (f"🏆 <b>Advancement Prediction</b>\n\n"
+               f"{f1} {t1}  vs  {t2} {f2}\n\n"
+               f"{'✅ Current pick: ' + tname(existing['team'],lang) if existing else ''}\n"
+               f"Which team advances? (+5 pts)")
+
+    kb = [
+        [Btn(f"{f1} {t1}", callback_data=f"advpick_{match_id}_{m['team1']}"),
+         Btn(f"{f2} {t2}", callback_data=f"advpick_{match_id}_{m['team2']}")],
+        [Btn("🔙 برگشت" if lang=="fa" else "🔙 Back",
+             callback_data=f"stage_{m['stage']}")]
+    ]
+    await query.edit_message_text(txt, parse_mode="HTML", reply_markup=Markup(kb))
+
+async def cb_advancement_pick(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """callback_data: advpick_{match_id}_{team}"""
+    query = update.callback_query
+    parts = query.data.split("_", 2)
+    match_id = int(parts[1])
+    team = parts[2]
+    user = await get_user(query.from_user.id)
+    lang = user["lang"] if user else "fa"
+
+    result = await save_advancement(query.from_user.id, match_id, team)
+    if result == "locked":
+        await query.answer(
+            "⛔ بازی قفل شده!" if lang=="fa" else "⛔ Match locked!", show_alert=True)
+        return
+    if result == "invalid_team":
+        await query.answer("❌ تیم نامعتبر!" if lang=="fa" else "❌ Invalid team!", show_alert=True)
+        return
+
+    m = await get_match(match_id)
+    t = tname(team, lang)
+    await query.answer(
+        f"✅ پیش‌بینی صعود: {t} (+۵ امتیاز اگه درست باشه)" if lang=="fa"
+        else f"✅ Advancement pick: {t} (+5 pts if correct)", show_alert=True)
+
+    # بازگشت به لیست مرحله
+    stage = m["stage"]
+    matches = [m2 for m2 in await get_all_matches(stage)
+               if not m2["is_locked"] and not m2["is_finished"]]
+    if matches:
+        from wc_data import STAGE_LABEL
+        lbl = STAGE_LABEL.get(stage,{}).get(lang, stage)
+        await _show_knockout_list(query, lang, matches, lbl, user_id=query.from_user.id)

@@ -8,7 +8,9 @@ from database import (
     get_matches_to_notify, get_matches_to_check_result,
     get_match, get_prediction, get_all_users, get_user,
     set_result, mark_notif_sent, mark_result_sent,
-    count_exact_predictions, get_pool
+    count_exact_predictions, get_pool,
+    score_advancements, apply_boosts_to_predictions,
+    get_advancement,
 )
 from api_client import get_match_result
 from utils import flag, tname, fmt_time
@@ -110,15 +112,30 @@ async def _handle_knockout_result(bot: Bot, m):
     p1 = result.get("penalty_home")
     p2 = result.get("penalty_away")
     # set_result با نتیجه ۹۰ دقیقه — اگه تساوی بود امتیاز تساوی میگیره (درست)
-    count, winner, _ = await set_result(m["id"], r1, r2, p1, p2)
-    await mark_result_sent(m["id"])
-    await _announce_result(bot, m, r1, r2, p1, p2, count, winner)
+    count, winner, changed_preds = await set_result(m["id"], r1, r2, p1, p2)
 
-async def _announce_result(bot: Bot, m, r1, r2, p1, p2, pred_count, winner=None):
+    # اعمال بوست ×۲ روی امتیازهای محاسبه‌شده
+    boost_changes = await apply_boosts_to_predictions(m["id"])
+    # ساختن دیکشنری کاربر→ امتیاز boost برای استفاده در announce
+    boost_map = {b["user_id"]: b for b in boost_changes}
+
+    # محاسبه امتیاز پیش‌بینی صعود
+    adv_changes = []
+    if winner:
+        adv_changes = await score_advancements(m["id"], winner)
+    adv_map = {a["user_id"]: a for a in adv_changes}
+
+    await mark_result_sent(m["id"])
+    await _announce_result(bot, m, r1, r2, p1, p2, count, winner, boost_map, adv_map)
+
+async def _announce_result(bot: Bot, m, r1, r2, p1, p2, pred_count, winner=None,
+                           boost_map=None, adv_map=None):
     users = await get_all_users()
     f1, f2 = flag(m["team1"]), flag(m["team2"])
     exact_count = await count_exact_predictions(m["id"])
     is_knockout = m["stage"] in KNOCKOUT_STAGES
+    boost_map = boost_map or {}
+    adv_map = adv_map or {}
 
     for u in users:
         try:
@@ -139,20 +156,40 @@ async def _announce_result(bot: Bot, m, r1, r2, p1, p2, pred_count, winner=None)
                 if winner and is_knockout:
                     txt += f"\n🏆 Winner: {flag(winner)} {tname(winner, lang)}\n"
 
-            pred = await get_prediction(u["user_id"], m["id"])
+            uid = u["user_id"]
+            pred = await get_prediction(uid, m["id"])
             txt += "\n"
             if pred and pred["points"] is not None:
                 pts = pred["points"]
+                is_boosted = uid in boost_map
+                boost_note = ""
+                if is_boosted:
+                    old = boost_map[uid]["old_pts"]
+                    boost_note = f" 🚀×۲ ({old}→{pts})" if lang=="fa" else f" 🚀×2 ({old}→{pts})"
                 if lang == "fa":
                     txt += (f"پیش‌بینی تو: {pred['pred1']}-{pred['pred2']}\n"
-                            f"امتیاز این بازی: <b>+{pts}</b> {'🎯' if pts==10 else '✅' if pts>=5 else '❌'}\n")
+                            f"امتیاز این بازی: <b>+{pts}</b>{boost_note} "
+                            f"{'🎯' if pts>=20 else '🎯' if pts==10 else '✅' if pts>=5 else '❌'}\n")
                 else:
                     txt += (f"Your pick: {pred['pred1']}-{pred['pred2']}\n"
-                            f"Points: <b>+{pts}</b> {'🎯' if pts==10 else '✅' if pts>=5 else '❌'}\n")
+                            f"Points: <b>+{pts}</b>{boost_note} "
+                            f"{'🎯' if pts>=20 else '🎯' if pts==10 else '✅' if pts>=5 else '❌'}\n")
             elif lang == "fa":
                 txt += "پیش‌بینی نکرده بودی — ۰ امتیاز\n"
             else:
                 txt += "No prediction — 0 points\n"
+
+            # امتیاز صعود
+            if is_knockout and winner and uid in adv_map:
+                adv = adv_map[uid]
+                adv_pts = adv["points"]
+                adv_team = tname(adv["team"], lang)
+                if lang == "fa":
+                    txt += (f"🏆 پیش‌بینی صعود: {adv_team} → "
+                            f"<b>+{adv_pts}</b> {'✅' if adv_pts==5 else '❌'}\n")
+                else:
+                    txt += (f"🏆 Advancement pick: {adv_team} → "
+                            f"<b>+{adv_pts}</b> {'✅' if adv_pts==5 else '❌'}\n")
 
             if lang == "fa":
                 txt += f"\n🎯 <b>{exact_count}</b> نفر نتیجه رو دقیق زدن"
