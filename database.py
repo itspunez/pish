@@ -124,6 +124,49 @@ async def bulk_insert_knockout_matches(matches: list):
             """, [(m[1], m[0], m[2], m[3],
                    datetime.fromisoformat(m[4]+":00+00:00"), m[5]) for m in rows])
 
+async def sync_knockout_teams(knockout_matches: list) -> int:
+    """آپدیت تیم‌ها و ساعت/شهر بازی‌های حذفی که هنوز placeholder دارن.
+    فقط ردیف‌هایی آپدیت میشن که:
+      - is_finished=FALSE (تموم نشده)
+      - is_locked=FALSE (قفل نشده — یعنی هنوز شروع نشده)
+      - تیم‌هاشون placeholder هستن (مثل 1A, 2B, W77)
+    پیش‌بینی‌ها و امتیازها دست نمیخوره.
+    """
+    import re
+    def is_placeholder(name):
+        if not name: return True
+        return bool(re.fullmatch(r"[1-3][A-L]+|W\d{1,3}|L\d{1,3}", name.strip()))
+
+    pool = await get_pool()
+    updated = 0
+    async with pool.acquire() as conn:
+        for m in knockout_matches:
+            stage, match_no, t1, t2, utc_str, city = m
+            new_dt = datetime.fromisoformat(utc_str + ":00+00:00")
+            # آپدیت تیم‌ها + ساعت + شهر — فقط اگه هنوز placeholder هستن
+            res = await conn.execute("""
+                UPDATE matches
+                   SET team1=$1, team2=$2, match_time=$3, city=$4,
+                       is_locked=FALSE, notif_sent=FALSE
+                 WHERE stage=$5
+                   AND api_id=$6
+                   AND is_finished=FALSE
+                   AND is_locked=FALSE
+                   AND (
+                       team1 ~ '^[1-3][A-L]+$' OR team1 ~ '^[WL]\\d+$' OR
+                       team2 ~ '^[1-3][A-L]+$' OR team2 ~ '^[WL]\\d+$'
+                   )
+            """, t1, t2, new_dt, city, stage, match_no)
+            try:
+                updated += int(res.split()[-1])
+            except Exception:
+                pass
+        # بعد از آپدیت تیم‌ها، predictions قدیمی (برای placeholder) پاک میشن
+        # چون prediction برای تیم placeholder بی‌معنیه — ولی اگه کسی
+        # پیش‌بینی واقعی داشته باشه (تیم‌های واقعی) دست نمیخوره
+        # (این حالت عملاً نمیتونه رخ بده چون save_prediction placeholder رو رد می‌کنه)
+    return updated
+
 async def sync_match_schedules(group_matches: list, knockout_matches: list):
     """به‌روزرسانی غیرتخریبی تاریخ/ساعت/شهر بازی‌ها از روی wc_data.py.
     فقط ستون‌های match_time و city به‌روز میشن. تیم‌ها، نتایج، پیش‌بینی‌ها

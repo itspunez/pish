@@ -11,7 +11,7 @@ from config import BOT_TOKEN, ADMIN_IDS
 from maintenance import is_maintenance
 
 from database import (init_db, bulk_insert_group_matches, bulk_insert_knockout_matches,
-                      sync_match_schedules, close_pool, lock_due_matches)
+                      sync_match_schedules, sync_knockout_teams, close_pool, lock_due_matches)
 from wc_data import GROUP_MATCHES, KNOCKOUT_MATCHES
 from notifier import send_reminders, check_and_announce_results, sync_api_ids
 from handlers.user import (
@@ -202,6 +202,12 @@ async def post_init(app):
         log.info("🕒 Schedule sync: %d match row(s) updated", n)
     except Exception as e:
         log.error("Schedule sync failed: %s", e)
+    # آپدیت تیم‌های حذفی از placeholder به تیم واقعی
+    try:
+        n = await sync_knockout_teams(KNOCKOUT_MATCHES)
+        log.info("🏟 Knockout teams sync: %d match row(s) updated", n)
+    except Exception as e:
+        log.error("Knockout teams sync failed: %s", e)
     log.info("✅ DB ready — %d group + %d knockout matches",
              len(GROUP_MATCHES), len(KNOCKOUT_MATCHES))
     # task ها رو نگه می‌داریم تا garbage collect نشن
